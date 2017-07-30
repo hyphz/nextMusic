@@ -12,7 +12,13 @@ KempstonJoystick        equ 31
 
 AyCoarseTuneA           equ 1
 AyFineTuneA             equ 0
+AyCoarseTuneB           equ 3
+AyFineTuneB             equ 2
+AyCoarseTuneC           equ 5
+AyFineTuneC             equ 4
 AyAmplitudeA            equ 8
+AyAmplitudeB            equ 9
+AyAmplitudeC            equ 10
 AyAmpPeriodFine         equ 11
 AyAmpPeriodCoarse       equ 12
 AyAmpShape              equ 13
@@ -65,6 +71,10 @@ TestLoop                call MusicUpdate
 
 MusicInit               aysendabc(7, 56)
                         aysendabc(AyAmplitudeA, %00010000)
+                        aysendabc(AyAmplitudeB, %00010000)
+                        aysendabc(AyAmplitudeC, %00010000)
+
+
                         aysendabc(AyAmpPeriodFine, $01)
                         aysendabc(AyAmpPeriodCoarse, $10)
                         aysendabc(AyAmpShape, %00001000)
@@ -171,7 +181,10 @@ StartPatternCmd         ld e, d                           ; Form voice number as
                         ret
 
 ; BeatMaintainVoice. Called with IX pointing to voice's control block and D holding reversed voice number
-BeatMaintainVoice       ld a,(ix+BeatCountdown)           ; Time for next pattern command?
+BeatMaintainVoice       ld a, NumVoices                   ; Put real voice number into D
+                        sub d
+                        ld d, a
+                        ld a,(ix+BeatCountdown)           ; Time for next pattern command?
                         cp 0
                         jp z, PatternCommand              ; Yes, go do it
                         dec a                             ; Nope, just update beat countdown
@@ -188,9 +201,14 @@ PatternCommand          ld bc,(ix+PatternPC)              ; BC is address of cur
                         ld c,a                            ; Build note table offset in bc
                         ld b,0
                         add hl,bc                         ; Add offset to base, HL is now note table address of note
-                        aysendabc(AyCoarseTuneA,(hl))     ; Get coarse tune value from note table
+                        ld a,d
+                        add a,a
+                        ld e,a
+                        inc e
+                        aysendabc(e,(hl))                 ; Get coarse tune value from note table
                         inc hl                            ; Go to next byte in note table
-                        aysendabc(AyFineTuneA,(hl))       ; Get fine tune value from note table
+                        dec e
+                        aysendabc(e,(hl))                 ; Get fine tune value from note table
 PatternPCOneByte        inc iy                            ; IX now points to address of wait time of next command
                         ld bc, iy
                         ld (ix+PatternPC), bc             ; It's the new music PC
@@ -207,6 +225,7 @@ PatternLoopCommand      ld bc, (ix+LoopPC)                ; Set patternPC to loo
 FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
                         ld (ix+BeatCountdown),a
+                        cp 0
                         jp z, PatternCommand
                         ret
 
@@ -237,6 +256,8 @@ BeatWait                db 00
 
 
 music                   db 0, 0
+                        dw pattern
+                        db 2, 1
                         dw pattern
                         db 255
 
