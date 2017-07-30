@@ -67,25 +67,25 @@ MusicInit               aysendabc(7, 56)
                         aysendabc(AyAmpPeriodFine, $01)
                         aysendabc(AyAmpPeriodCoarse, $10)
                         aysendabc(AyAmpShape, %00001000)
-                        ld bc, music                      ; Set musicPointer to start of music
+                        ld bc, music                      ; Set musicPointer to address of start of music
                         ld (MusicMasterPC), bc
-                        ld a, (Tempo)
+                        ld a, 0                           ; Set initial tempoWait to 0 so music starts immediately
                         ld (TempoWait), a
-
                         ret
 
 
 MusicUpdate             ld a, (TempoWait)                 ; Are we waiting for a beat?
-                        jp z, NextBeat                    ; No, go to next beat
-                        dec a                             ; Yes, decrement frame wait counter
-                        ld (TempoWait), a
+                        cp 0                              ; Ie, has TempoWait value reached 0?
+                        jp z, NextBeat                    ; It has - go to next beat
+                        dec a                             ; It hasn't, we're waiting - decrement frame wait counter
+                        ld (TempoWait), a                 ; And store it back into TempoWait counter.
                         ld ix, VoiceStatusBank            ; No beat this frame. But any voices need frame-based maintenance?
                         ld d, NumVoices                   ; D is loop counter for checking
                         ld bc, VoiceSize                  ; BC holds size of a voice record (because we can add it to IX)
 CheckVFrameMaint        ld a, (ix+UpdateStatus)           ; Load status byte for current voice
                         bit 1,a                           ; Is bit 1 set?
                         jp nz, NoFrameMaintenance         ; No, no frame maintenance needed
-                        push de
+                        push de                           ; Push all the stuff we're using in this loop
                         push ix
                         push bc
                         ; call FrameMaintainVoice         ; Yes, go do it (we don't know how yet ;) )
@@ -101,89 +101,93 @@ DoneFrameMaintenance    ret                               ; We're done
 
 
 
-NextBeat                ld a, (Tempo)                     ; Reset tempo clock
+NextBeat                ld a, (Tempo)                     ; Beat time. Reset tempo clock
                         ld (TempoWait), a
-                        ld a, (BeatWait)                  ; Are we waiting to run master command?
-                        jp nz, NoMasterCmd                ; No, run it!
-                        call NextMasterCmd
-                        jp MasterCmdDone
-NoMasterCmd             dec a                             ; Yes, wait this frame
-                        ld (BeatWait), a
+                        ld a, (BeatWait)                  ; Check beat clock for master commands
+                        cp 0                              ; Is it 0?
+                        jp nz, NoMasterCmd                ; No, We are waiting -> don't run master command
+                        call NextMasterCmd                ; Yes, We aren't waiting -> go run it
+                        ld bc,(MusicMasterPC)             ; BC holds address of delay for next command
+                        ld a,(bc)                         ; A holds delay for next command
+                        ld (BeatWait), a                  ; Load it into wait
+                        jp MasterCmdDone                  ; Skip timer stuff below
+NoMasterCmd             dec a                             ; We're waiting, count down wait timer
+                        ld (BeatWait), a                  ; Put it back into wait
 MasterCmdDone           ld ix, VoiceStatusBank            ; Now do beat AND frame maintenance.
                         ld d, NumVoices                   ; D is loop counter for checking
 CheckBeatMaint          ld a, (ix+UpdateStatus)           ; Load status byte for current voice
                         bit 0,a                           ; Is bit 0 set?
-                        jp nz, NextVoiceBeatMaint         ; Nothing needed (nothing would ever need frame but not beat maintenance)
+                        jp z, NextVoiceBeatMaint          ; If not, Nothing needed (nothing would ever need frame but not beat maintenance)
                         bit 1,a                           ; Is bit 1 set?
-                        jp nz, JustBeatMaintenance        ; Only beat maintenance needed
-                        push de
+                        jp z, JustBeatMaintenance         ; If not, Only beat maintenance needed
+                        push de                           ; Need both
                         push ix
-                        ; call FrameMaintainVoice         ; Yes, go do it (we don't know how yet ;) )
+                        ; call FrameMaintainVoice         ; Yes, go do it (we don't know how yet.. ;) )
                         call BeatMaintainVoice
                         pop ix
                         pop de
-                        jp NextVoiceBeatMaint
-JustBeatMaintenance     push de
+                        jp NextVoiceBeatMaint             ; Done with this voice
+JustBeatMaintenance     push de                           ; Do only beat maintenance
                         push ix
                         call BeatMaintainVoice
                         pop ix
                         pop de
-NextVoiceBeatMaint      dec d                             ; Lower loop counter
+NextVoiceBeatMaint      dec d                             ; Lower voice loop counter
                         jp z, DoneBeatMaintenance         ; If it's 0, we're done (don't need to run when =0 because we ran when =NumVoices)
-                        ld bc, VoiceSize
+                        ld bc, VoiceSize                  ; Load voice size into BC to add it to IX
                         add ix, bc                        ; Move IX to point at next voice block
                         jp CheckBeatMaint                 ; And loop
 DoneBeatMaintenance     ret                               ; We're done
 
 
-NextMasterCmd           ld ix, (MusicMasterPC)            ; Get current master PC (this will be delta time)
+NextMasterCmd           ld ix, (MusicMasterPC)            ; IX is current delta time
                         ld d, (ix+1)                      ; This will be command
                         ld a, d                           ; Mask off voice number
                         and %11110000
-                        jp z, StartPatternCmd             ; 0 = Start pattern
-
+                        jp z, StartPatternCmd             ; Check command. 0 = Start pattern
                         ret
 
-StartPatternCmd         ld e, d                           ; Get voice number
+StartPatternCmd         ld e, d                           ; Form voice number as a 16-bit value in DE
                         ld d, 0
                         ld iy, de                         ; IY now holds voice number
-                        add iy, iy                        ; IY now holds offset for voice bank address table
-                        ld bc, VoiceStatusLoc             ; BC is base of Voice Status address table
+                        add iy, iy                        ; Voice bank addresses are 2 bytes. IY now holds offset for voice bank address table
+                        ld bc, VoiceStatusLoc             ; BC is base of Voice bank address table
                         add iy, bc                        ; IY is address of voice bank address
-                        ld bc, (iy)                       ; BC is now base of selected voice bank
-                        ld iy, bc
+                        ld bc, (iy)                       ; BC is address of voice bank
+                        ld iy, bc                         ; Put it back into IY so we can use indexing
                         ld a, (iy+UpdateStatus)           ; Get voice status byte
                         set 0, a                          ; It needs beat maintenance now.
-                        ld (iy+UpdateStatus), a
-                        ld a, (ix+2)                      ; Load up 2 bytes of pattern address into Voice Status table.
+                        ld (iy+UpdateStatus), a           ; Store that fact in voice status byte
+                        ld a, (ix+2)                      ; Load up 2 bytes of pattern address into voice status table
                         ld (iy+PatternPC), a
                         ld a, (ix+3)
                         ld (iy+PatternPC+1), a
-                        ld bc, (iy+PatternPC)
-                        ld a,(bc)
-                        ld (iy+BeatCountdown), a          ; Set beat count to value for first note
+                        ld bc, (iy+PatternPC)             ; BC is address of first byte of the pattern
+                        ld a,(bc)                         ; A is first byte of the pattern, which will be the initial deltatime
+                        ld (iy+BeatCountdown), a          ; Set initial beat countdown to this
                         ld bc, 4                          ; Move master PC on by 4 bytes
                         add ix, bc
-                        ld (MusicMasterPC), ix
+                        ld (MusicMasterPC), ix            ; And store back into master PC
                         ret
 
 ; BeatMaintainVoice. Called with IX pointing to voice's control block and D holding reversed voice number
 BeatMaintainVoice       ld a,(ix+BeatCountdown)           ; Time for next pattern command?
-                        jp z, PatternCommand              ; Yes
+                        cp 0
+                        jp z, PatternCommand              ; Yes, go do it
                         dec a                             ; Nope, just update beat countdown
                         ld (ix+BeatCountdown), a
-                        ret
-PatternCommand          ld bc,(ix+PatternPC)              ; Get pattern PC address into iy
-                        ld iy, bc
+                        ret                               ; And we're done
+PatternCommand          ld bc,(ix+PatternPC)              ; BC is address of current pattern deltatime
+                        ld iy, bc                         ; Move to IY to use indexing
                         inc iy                            ; Now points to base of command
-                        ld hl, notetable                  ; Cue up note table
-                        ld a,(iy+0)                       ; Get Note value
+                        ld a,(iy+0)                       ; Get command value
                         bit 7, a                          ; Is MSB set?
                         jp nz, runNoteCommand             ; It's a command, not a note
-                        add a,a                           ; Double to get offset in note table
+                        ld hl, notetable                  ; It's a note, cue up note table
+                        add a,a                           ; Notes are 2 bytes, double to get offset in note table
                         ld c,a                            ; Build note table offset in bc
                         ld b,0
-                        add hl,bc                         ; HL is now note table address of note
+                        add hl,bc                         ; Add offset to base, HL is now note table address of note
                         aysendabc(AyCoarseTuneA,(hl))     ; Get coarse tune value from note table
                         inc hl                            ; Go to next byte in note table
                         aysendabc(AyFineTuneA,(hl))       ; Get fine tune value from note table
@@ -195,7 +199,8 @@ PatternCommand          ld bc,(ix+PatternPC)              ; Get pattern PC addre
 runNoteCommand          and %01111111                     ; Mask off command indicator bit
                         jp z, MusicInit                   ; Command 0, reset
 
-FinishPatternCommand    ld a,(ix+PatternPC)              ; Get wait value for next command
+FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for next command
+                        ld a,(bc)
                         ld (ix+BeatCountdown),a
                         jp z, PatternCommand
                         ret
@@ -231,7 +236,7 @@ music                   db 0, 0
                         db 255
 
 
-pattern                 db 0, 12, 10, 13, 10, 14, 10, 15, 10, %10000000
+pattern                 db 0, 12, 1, 16, 1, 19, 1, 16, 1, %10000000
 
 ; 8 octaves, note indexes 0-95, from 128 documentation
 notetable               db 13,16,12,84,11,163,10,252,10,94,9,201,9,60,8,184,8,58
@@ -267,6 +272,7 @@ Zeus_SP                 equ $FF46                               ; Tell the emula
 
                         ; Now, also generate a tzx file using the loader
                         output_tzx AppFilename+".tzx",AppFilename,"",AppFirst,AppLast-AppFirst,2,AppEntry ; A tzx file using the loader
+                        output_tzx AppFilename+"m1.tzx",AppFilename,"",AppFirst,AppLast-AppFirst,1,AppEntry ; A tzx file using the loader
 
 
                         output_tap AppFilename+".tap",AppFilename,"",AppFirst,AppLast-AppFirst,3,AppEntry ; A tzx file using the loader
