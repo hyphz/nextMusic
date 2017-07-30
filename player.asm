@@ -17,17 +17,17 @@ AyAmpPeriodFine         equ 11
 AyAmpPeriodCoarse       equ 12
 AyAmpShape              equ 13
 
-out16bc                 macro(port, val)
+out16bc                 macro(port, val)            ; Outputs on 16 bit port address
                         ld bc, port
                         out (c), val
                         mend
 
-in16bca                 macro(port)
+in16bca                 macro(port)                 ; Inputs to A from 16 bit port address
                         ld bc, port
                         in a,(c)
                         mend
 
-aysendabc               macro(reg, val)
+aysendabc               macro(reg, val)             ; Sends val to AY register reg
                         ld a, reg
                         out16bc(AyRegSelect, a)
                         ld a, val
@@ -39,43 +39,78 @@ aysendabc               macro(reg, val)
 
                         org AppFirst                    ; Start of application
 
-AppEntry                aysendabc(7, 56)
+AppEntry                call MusicInit
+TestLoop                call MusicUpdate
+                        halt
+                        jp TestLoop
+
+
+MusicInit               aysendabc(7, 56)
                         aysendabc(AyAmplitudeA, %00010000)
                         aysendabc(AyAmpPeriodFine, $01)
-                        aysendabc(AyAmpPeriodCoarse, $06)
+                        aysendabc(AyAmpPeriodCoarse, $10)
                         aysendabc(AyAmpShape, %00001000)
-
-Reset                   ld bc, music
+                        ld bc, music                      ; Set musicPointer to start of music
                         ld (music_pointer), bc
-Loop                    ld a, (wait_frames)
-                        jp z, nextNote
-                        dec a
-                        ld (wait_frames), a
-                        halt
-                        jp Loop
-nextNote                ld hl, notetable
-                        ld ix, (music_pointer)
-                        ld a,(ix+0)
-                        cp 99
-                        jp z, Reset
-                        rla
-                        and %11111110
-                        ld c,a
+                        ld a, (Tempo)
+                        ld (TempoWait), a
+
+                        ret
+
+MusicUpdate             ld a, (TempoWait)                 ; Are we waiting for a beat?
+                        jp z, NextBeat                    ; No, go to next beat
+                        dec a                             ; Yes, decrement frame wait counter
+                        ld (TempoWait), a
+                        ret
+
+NextBeat                ld a, (Tempo)                     ; Reset tempo clock
+                        ld (TempoWait), a
+                        ld a, (BeatWait)                  ; Are we waiting to run next command?
+                        jp z, nextNote                    ; No, run it!
+                        dec a                             ; Yes, wait this frame
+                        ld (BeatWait), a
+                        ret
+
+nextNote                ld hl, notetable                  ; Cue up note table
+                        ld ix, (music_pointer)            ; Get command at current music PC
+                        inc ix                            ; Increment to get to note value
+                        ld a,(ix+0)                       ; Note value now in A
+                        bit 7, a                          ; Is MSB set?
+                        jp nz, runNoteCommand             ; It's a command, not a note
+                        add a,a                           ; Double to get offset in note table
+                        ld c,a                            ; Build note table offset in bc
                         ld b,0
-                        add hl,bc
-                        aysendabc(AyCoarseTuneA,(hl))
-                        inc hl
-                        aysendabc(AyFineTuneA,(hl))
-                        ld a,(ix+1)
-                        ld (wait_frames),a
-                        ld bc, 2
-                        add ix, bc
-                        ld (music_pointer), ix
-                        jp Loop
+                        add hl,bc                         ; HL is now note table address of note
+                        aysendabc(AyCoarseTuneA,(hl))     ; Get coarse tune value from note table
+                        inc hl                            ; Go to next byte in note table
+                        aysendabc(AyFineTuneA,(hl))       ; Get fine tune value from note table
+                        inc ix                            ; IX now points to address of wait time of next command
+                        ld (music_pointer), ix            ; It's the new music PC
+                        jp finishNote
+
+runNoteCommand          and %01111111                     ; Mask off command indicator bit
+                        jp z, MusicInit                   ; Command 0, reset
+
+finishNote              ld a,(music_pointer)              ; Get wait value for next command
+                        ld (BeatWait),a
+                        jp NextBeat                       ; Go to NextBeat in case next wait time was zero
+
+
+
+
+
+Tempo                   db 13                              ; Number of frames per beat count
+
+TempoWait               db 0
+
 
 music_pointer           dw 00
-wait_frames             db 00
-music                   db 12, 10, 13, 10, 14, 10, 15, 10, 99, 00
+BeatWait                db 00
+
+
+music                   db 0, 12, 10, 13, 10, 14, 10, 15, 10, %10000000
+
+; 8 octaves, note indexes 0-95, from 128 documentation
 notetable               db 13,16,12,84,11,163,10,252,10,94,9,201,9,60,8,184,8,58
                         db 7,196,7,85,6,235,6,136,6,42,5,209,5,126,5,47,4,228,4,158
                         db 4,92,4,29,3,226,3,170,3,117,3,68,3,21,2,232,2,191,2,151
