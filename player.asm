@@ -39,6 +39,7 @@ aysendabc               macro(reg, val)             ; Sends val to AY register r
                         struct
 UpdateStatus            ds 1
 PatternPC               ds 2
+LoopPC                  ds 2
 BeatCountdown           ds 1
 VoiceSize               equ .
                         send
@@ -158,10 +159,9 @@ StartPatternCmd         ld e, d                           ; Form voice number as
                         ld a, (iy+UpdateStatus)           ; Get voice status byte
                         set 0, a                          ; It needs beat maintenance now.
                         ld (iy+UpdateStatus), a           ; Store that fact in voice status byte
-                        ld a, (ix+2)                      ; Load up 2 bytes of pattern address into voice status table
-                        ld (iy+PatternPC), a
-                        ld a, (ix+3)
-                        ld (iy+PatternPC+1), a
+                        ld hl, (ix+2)                     ; Load up 2 bytes of pattern address into voice status table
+                        ld (iy+PatternPC), hl
+                        ld (iy+LoopPC), hl
                         ld bc, (iy+PatternPC)             ; BC is address of first byte of the pattern
                         ld a,(bc)                         ; A is first byte of the pattern, which will be the initial deltatime
                         ld (iy+BeatCountdown), a          ; Set initial beat countdown to this
@@ -191,13 +191,18 @@ PatternCommand          ld bc,(ix+PatternPC)              ; BC is address of cur
                         aysendabc(AyCoarseTuneA,(hl))     ; Get coarse tune value from note table
                         inc hl                            ; Go to next byte in note table
                         aysendabc(AyFineTuneA,(hl))       ; Get fine tune value from note table
-                        inc iy                            ; IX now points to address of wait time of next command
+PatternPCOneByte        inc iy                            ; IX now points to address of wait time of next command
                         ld bc, iy
                         ld (ix+PatternPC), bc             ; It's the new music PC
                         jp FinishPatternCommand
 
 runNoteCommand          and %01111111                     ; Mask off command indicator bit
-                        jp z, MusicInit                   ; Command 0, reset
+                        jp z, PatternLoopCommand          ; Command 0, loop
+                        jp PatternPCOneByte               ; Invalid command, skip it
+
+PatternLoopCommand      ld bc, (ix+LoopPC)                ; Set patternPC to loopPC
+                        ld (ix+PatternPC), bc
+                        jp FinishPatternCommand           ; Since we just changed patternPC don't calculate it for "next" command
 
 FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
