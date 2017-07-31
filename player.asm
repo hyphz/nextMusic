@@ -1,4 +1,12 @@
-; This is a basic template file for writing 128K Spectrum code.
+; Attempt at a SD/AY driver
+; By Mark Green (hyphz)
+; Licensed under Creative Commons Attribution 4.0
+
+; Thanks:
+; utz@SpecNext
+; Matt Westcott
+; Leeda Kifee
+; Cesar Hernandez Bano for Zesarux
 
 AppFilename             equ "player"                   ; What we're called (for file generation)
 
@@ -50,14 +58,6 @@ BeatCountdown           ds 1
 VoiceSize               equ .
                         send
 
-                        struct
-MasterDeltaTime         ds 1
-Command                 ds 1
-ParameterA              ds 1
-ParameterB              ds 1
-ParameterC              ds 1
-                        send   ; No length value because length is variable
-
 
 ; Start planting code here. (When generating a tape file we start saving from here)
 
@@ -73,8 +73,6 @@ MusicInit               aysendabc(7, 56)
                         aysendabc(AyAmplitudeA, %00010000)
                         aysendabc(AyAmplitudeB, %00010000)
                         aysendabc(AyAmplitudeC, %00010000)
-
-
                         aysendabc(AyAmpPeriodFine, $01)
                         aysendabc(AyAmpPeriodCoarse, $10)
                         aysendabc(AyAmpShape, %00001000)
@@ -85,70 +83,64 @@ MusicInit               aysendabc(7, 56)
                         ret
 
 
-MusicUpdate             ld a, (TempoWait)                 ; Are we waiting for a beat?
-                        cp 0                              ; Ie, has TempoWait value reached 0?
-                        jp z, NextBeat                    ; It has - go to next beat
-                        dec a                             ; It hasn't, we're waiting - decrement frame wait counter
-                        ld (TempoWait), a                 ; And store it back into TempoWait counter.
-                        ld ix, VoiceStatusBank            ; No beat this frame. But any voices need frame-based maintenance?
-                        ld d, NumVoices                   ; D is loop counter for checking
-                        ld bc, VoiceSize                  ; BC holds size of a voice record (because we can add it to IX)
-CheckVFrameMaint        ld a, (ix+UpdateStatus)           ; Load status byte for current voice
+MusicUpdate             ld a, (TempoWait)                 ; Are we waiting for a beat? Load temp value
+                        sub 1                             ; Subtract one from it
+                                                          ; (SUB takes 3 more states than DEC but sets the carry flag properly,
+                                                          ; which saves us from doing a CP to test for zero, which would take 7 more)
+                        jp c, NextBeat                    ; If subtracting 1 overflowed, it was 0, so go process the beat
+                        ld (TempoWait), a                 ; It didn't overflow. Store it back into TempoWait counter
+                        ld hl, VoiceStatusBank            ; No beat this frame. But any voices need frame-based maintenance?
+                        ld b, NumVoices                   ; HL is address of voice to check, B is loop counter for checking
+CheckVFrameMaint        ld a, (hl)                        ; Load status byte for current voice
                         bit 1,a                           ; Is bit 1 set?
                         jp nz, NoFrameMaintenance         ; No, no frame maintenance needed
-                        push de                           ; Push all the stuff we're using in this loop
-                        push ix
+                        push hl
                         push bc
                         ; call FrameMaintainVoice         ; Yes, go do it (we don't know how yet ;) )
                         pop bc
-                        pop ix
-                        pop de
-NoFrameMaintenance      dec d                             ; Lower loop counter
-                        jp z, DoneFrameMaintenance        ; If it's 0, we're done (don't need to run when =0 because we ran when =NumVoices)
-                        add ix, bc                        ; Move IX to point at next voice block
-                        jp CheckVFrameMaint               ; And loop
-DoneFrameMaintenance    ret                               ; We're done
+                        pop hl
+NoFrameMaintenance      ld de, VoiceSize
+                        add hl, de                        ; Move IX to point at next voice block
+                        djnz CheckVFrameMaint             ; Decrement B and loop if not zero
+                        ret                               ; We're done
 
 
-
-
-NextBeat                ld a, (Tempo)                     ; Beat time. Reset tempo clock
+NextBeat                ld a, (Tempo)                     ; Beat has happened. Reset tempo clock
                         ld (TempoWait), a
                         ld a, (BeatWait)                  ; Check beat clock for master commands
-                        cp 0                              ; Is it 0?
-                        jp nz, NoMasterCmd                ; No, We are waiting -> don't run master command
+                        sub 1                             ; Same trick as above to set carry
+                        jp nc, NoMasterCmd                ; If it didn't overflow it wasn't 0, we are waiting, don't run master command
                         call NextMasterCmd                ; Yes, We aren't waiting -> go run it
-                        ld bc,(MusicMasterPC)             ; BC holds address of delay for next command
-                        ld a,(bc)                         ; A holds delay for next command
+                                                          ; Back from doing master command, set delay for next master command
+                        ld hl,(MusicMasterPC)             ; HL holds address of delay for next command
+                        ld a,(hl)                         ; A holds delay for next command
                         ld (BeatWait), a                  ; Load it into wait
                         jp MasterCmdDone                  ; Skip timer stuff below
-NoMasterCmd             dec a                             ; We're waiting, count down wait timer
-                        ld (BeatWait), a                  ; Put it back into wait
-MasterCmdDone           ld ix, VoiceStatusBank            ; Now do beat AND frame maintenance.
-                        ld d, NumVoices                   ; D is loop counter for checking
-CheckBeatMaint          ld a, (ix+UpdateStatus)           ; Load status byte for current voice
+
+NoMasterCmd             ld (BeatWait), a                  ; Put subtracted, non-overflowed, value back into beat clock
+MasterCmdDone           ld hl, VoiceStatusBank            ; Now do beat AND frame maintenance.
+                        ld b, NumVoices                   ; B is loop counter for checking
+CheckBeatMaint          ld a, (hl)                        ; Load status byte for current voice
                         bit 0,a                           ; Is bit 0 set?
                         jp z, NextVoiceBeatMaint          ; If not, Nothing needed (nothing would ever need frame but not beat maintenance)
                         bit 1,a                           ; Is bit 1 set?
                         jp z, JustBeatMaintenance         ; If not, Only beat maintenance needed
-                        push de                           ; Need both
-                        push ix
+                        push bc                           ;
+                        push hl
                         ; call FrameMaintainVoice         ; Yes, go do it (we don't know how yet.. ;) )
                         call BeatMaintainVoice
-                        pop ix
-                        pop de
+                        pop hl
+                        pop bc
                         jp NextVoiceBeatMaint             ; Done with this voice
-JustBeatMaintenance     push de                           ; Do only beat maintenance
-                        push ix
+JustBeatMaintenance     push bc                           ; Do only beat maintenance
+                        push hl
                         call BeatMaintainVoice
-                        pop ix
-                        pop de
-NextVoiceBeatMaint      dec d                             ; Lower voice loop counter
-                        jp z, DoneBeatMaintenance         ; If it's 0, we're done (don't need to run when =0 because we ran when =NumVoices)
-                        ld bc, VoiceSize                  ; Load voice size into BC to add it to IX
-                        add ix, bc                        ; Move IX to point at next voice block
-                        jp CheckBeatMaint                 ; And loop
-DoneBeatMaintenance     ret                               ; We're done
+                        pop hl
+                        pop bc
+NextVoiceBeatMaint      ld de, VoiceSize
+                        add hl, de
+                        djnz CheckBeatMaint
+                        ret                               ; We're done
 
 
 NextMasterCmd           ld ix, (MusicMasterPC)            ; IX is current delta time
@@ -158,9 +150,8 @@ NextMasterCmd           ld ix, (MusicMasterPC)            ; IX is current delta 
                         jp z, StartPatternCmd             ; Check command. 0 = Start pattern
                         ret
 
-StartPatternCmd         ld e, d                           ; Form voice number as a 16-bit value in DE
-                        ld d, 0
-                        ld iy, de                         ; IY now holds voice number
+StartPatternCmd         ld iyl, b                         ; Form voice number as a 16-bit value in IY
+                        ld iyh, 0
                         add iy, iy                        ; Voice bank addresses are 2 bytes. IY now holds offset for voice bank address table
                         ld bc, VoiceStatusLoc             ; BC is base of Voice bank address table
                         add iy, bc                        ; IY is address of voice bank address
@@ -182,7 +173,7 @@ StartPatternCmd         ld e, d                           ; Form voice number as
 
 ; BeatMaintainVoice. Called with IX pointing to voice's control block and D holding reversed voice number
 BeatMaintainVoice       ld a, NumVoices                   ; Put real voice number into D
-                        sub d
+                        sub b
                         ld d, a
                         ld a,(ix+BeatCountdown)           ; Time for next pattern command?
                         cp 0
