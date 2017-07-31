@@ -45,9 +45,11 @@ in16bca                 macro(port)                 ; Inputs to A from 16 bit po
 
 aysendabc               macro(reg, val)             ; Sends val to AY register reg
                         ld a, reg
-                        out16bc(AyRegSelect, a)
+                        ld bc, AyRegSelect
+                        out (c), a
+                        ld b, $bf                   ; C is the same, $fd
                         ld a, val
-                        out16bc(AyRegWrite, a)
+                        out (c), a
                         mend
 
                         struct
@@ -55,6 +57,8 @@ UpdateStatus            ds 1
 PatternPC               ds 2
 LoopPC                  ds 2
 BeatCountdown           ds 1
+Stage                   ds 1
+StageCounter            ds 2
 VoiceSize               equ .
                         send
 
@@ -150,13 +154,14 @@ NextMasterCmd           ld ix, (MusicMasterPC)            ; IX is current delta 
                         jp z, StartPatternCmd             ; Check command. 0 = Start pattern
                         ret
 
-StartPatternCmd         ld iyl, d                         ; Form voice number as a 16-bit value in IY
-                        ld iyh, 0
-                        add iy, iy                        ; Voice bank addresses are 2 bytes. IY now holds offset for voice bank address table
-                        ld bc, VoiceStatusLoc             ; BC is base of Voice bank address table
-                        add iy, bc                        ; IY is address of voice bank address
-                        ld bc, (iy)                       ; BC is address of voice bank
-                        ld iy, bc                         ; Put it back into IY so we can use indexing
+StartPatternCmd         ld a, d                           ; Double voice number to get index into address list
+                        add a, a
+                        ld l, a
+                        ld h, VoiceStatusSeg
+                        ld c, (hl)
+                        inc hl
+                        ld b, (hl)
+                        ld iy, bc
                         ld a, (iy+UpdateStatus)           ; Get voice status byte
                         set 0, a                          ; It needs beat maintenance now.
                         ld (iy+UpdateStatus), a           ; Store that fact in voice status byte
@@ -191,19 +196,16 @@ PatternCommand          ld bc,(ix+PatternPC)              ; BC is address of cur
                         ld a,(iy+0)                       ; Get command value
                         bit 7, a                          ; Is MSB set?
                         jp nz, runNoteCommand             ; It's a command, not a note
-                        ld hl, notetable                  ; It's a note, cue up note table
+                        ld h, notetableSeg                ; It's a note. Get segment address of note table
                         add a,a                           ; Notes are 2 bytes, double to get offset in note table
-                        ld c,a                            ; Build note table offset in bc
-                        ld b,0
-                        add hl,bc                         ; Add offset to base, HL is now note table address of note
-                        ld a,d
+                        ld l,a                            ; Note table is segment aligned so just setting low bit finds location
+                        ld a,d                            ; AY fine tune register number is voice number * 2, get voice number
                         add a,a
-                        ld e,a
-                        inc e
-                        aysendabc(e,(hl))                 ; Get coarse tune value from note table
+                        ld e,a                            ; E is fine tune register number
+                        aysendabc(e,(hl))                 ; Get and send fine tune value from note table
                         inc hl                            ; Go to next byte in note table
-                        dec e
-                        aysendabc(e,(hl))                 ; Get fine tune value from note table
+                        inc e
+                        aysendabc(e,(hl))                 ; Get and send coarse tune value from note table
 PatternPCOneByte        inc iy                            ; IX now points to address of wait time of next command
                         ld bc, iy
                         ld (ix+PatternPC), bc             ; It's the new music PC
@@ -224,31 +226,46 @@ FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for n
                         jp z, PatternCommand
                         ret
 
+; ----------- Variables
 
-
-
-
-Tempo                   db 13                              ; Number of frames per beat count
-
-TempoWait               db 0
-
-VoiceStatusBank         loop NumVoices
-                          loop VoiceSize
-                            db 00
-                          lend
-                        lend
+                        align $0100
 
 CurVoiceAddress = VoiceStatusBank
 VoiceStatusLoc          loop NumVoices
                            dw CurVoiceAddress
                            CurVoiceAddress = CurVoiceAddress + VoiceSize
                         lend
+VoiceStatusSeg          equ (VoiceStatusLoc >> 8)
+
+TempoWait               db 0                ; Counter for frames left before a beat
+BeatWait                db 00               ; Counter for beats left before master command
+MusicMasterPC           dw 00               ; Address of current master command
+
+
+VoiceStatusBank         loop NumVoices      ; Status structures for voices
+                          loop VoiceSize
+                            db 00
+                          lend
+                        lend
+
+; 8 octaves, note indexes 0-95, from 128 documentation
+                        align $0100
+
+notetable               db 16, 13, 84, 12, 163, 11, 252, 10, 94, 10, 201, 9, 68, 9, 184, 8, 58, 8
+                        db 196, 7, 85, 7, 235, 6, 136, 6, 42, 6, 209, 5, 126, 5, 47, 5, 228, 4, 158, 4
+                        db 92, 4, 29, 4, 226, 3, 170, 3, 117, 3, 68, 3, 21, 3, 232, 2, 191, 2, 151, 2
+                        db 114, 2, 79, 2, 46, 2, 14, 2, 241, 1, 213, 1, 186, 1, 162, 1, 138, 1, 116, 1
+                        db 95, 1, 75, 1, 57, 1, 39, 1, 23, 1, 7, 1, 248, 0, 234, 0, 221, 0, 209, 0, 197, 0
+                        db 186, 0, 175, 0, 165, 0, 156, 0, 147, 0, 139, 0, 131, 0, 124, 0, 117, 0, 110, 0
+                        db 104, 0, 98, 0, 93, 0, 87, 0, 82, 0, 78, 0, 73, 0, 69, 0, 65, 0, 62, 0, 58, 0, 55, 0
+                        db 52, 0, 49, 0, 46, 0, 43, 0, 41, 0, 39, 0, 36, 0, 34, 0, 32, 0, 31, 0, 29, 0, 27, 0
+                        db 26, 0, 24, 0, 23, 0, 21, 0, 20, 0, 19, 0, 18, 0, 17, 0, 16, 0, 15, 0, 14, 0, 13, 0
+
+notetableSeg            equ (notetable >> 8)
 
 
 
-MusicMasterPC           dw 00
-BeatWait                db 00
-
+Tempo                   db 13                              ; Number of frames per beat count
 
 music                   db 0, 0
                         dw pattern
@@ -259,16 +276,7 @@ music                   db 0, 0
 
 pattern                 db 0, 12, 1, 16, 1, 19, 1, 16, 1, %10000000
 
-; 8 octaves, note indexes 0-95, from 128 documentation
-notetable               db 13,16,12,84,11,163,10,252,10,94,9,201,9,60,8,184,8,58
-                        db 7,196,7,85,6,235,6,136,6,42,5,209,5,126,5,47,4,228,4,158
-                        db 4,92,4,29,3,226,3,170,3,117,3,68,3,21,2,232,2,191,2,151
-                        db 2,114,2,79,2,46,2,14,1,241,1,213,1,186,1,162,1,138,1,116
-                        db 1,95,1,75,1,57,1,39,1,23,1,7,0,248,0,234,0,221,0,209,0,197
-                        db 0,186,0,175,0,165,0,156,0,147,0,139,0,131,0,124,0,117,0,110
-                        db 0,104,0,98,0,93,0,87,0,82,0,78,0,73,0,69,0,65,0,62,0,58,0,55
-                        db 0,52,0,49,0,46,0,43,0,41,0,39,0,36,0,34,0,32,0,31,0,29,0,27
-                        db 0,26,0,24,0,23,0,21,0,20,0,19,0,18,0,17,0,16,0,15,0,14,0,13
+
 
 
 ; Stop planting code after this. (When generating a tape file we save bytes below here)
