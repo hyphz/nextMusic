@@ -190,12 +190,12 @@ BeatMaintainVoice       ld a, NumVoices                   ; Put real voice numbe
                         dec a                             ; Nope, just update beat countdown
                         ld (ix+BeatCountdown), a
                         ret                               ; And we're done
-PatternCommand          ld bc,(ix+PatternPC)              ; BC is address of current pattern deltatime
-                        ld iy, bc                         ; Move to IY to use indexing
-                        inc iy                            ; Now points to base of command
-                        ld a,(iy+0)                       ; Get command value
+PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of current pattern deltatime
+                        inc hl                            ; Now points to base of command
+                        ld a,(hl)                         ; Get command value
                         bit 7, a                          ; Is MSB set?
                         jp nz, runNoteCommand             ; It's a command, not a note
+                        push hl
                         ld h, notetableSeg                ; It's a note. Get segment address of note table
                         add a,a                           ; Notes are 2 bytes, double to get offset in note table
                         ld l,a                            ; Note table is segment aligned so just setting low bit finds location
@@ -206,9 +206,9 @@ PatternCommand          ld bc,(ix+PatternPC)              ; BC is address of cur
                         inc hl                            ; Go to next byte in note table
                         inc e
                         aysendabc(e,(hl))                 ; Get and send coarse tune value from note table
-PatternPCOneByte        inc iy                            ; IX now points to address of wait time of next command
-                        ld bc, iy
-                        ld (ix+PatternPC), bc             ; It's the new music PC
+                        pop hl
+PatternPCOneByte        inc hl                            ; IX now points to address of wait time of next command
+                        ld (ix+PatternPC), hl             ; It's the new music PC
                         jp FinishPatternCommand
 
 runNoteCommand          and %01111111                     ; Mask off command indicator bit
