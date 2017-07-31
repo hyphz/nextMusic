@@ -150,7 +150,7 @@ NextMasterCmd           ld ix, (MusicMasterPC)            ; IX is current delta 
                         jp z, StartPatternCmd             ; Check command. 0 = Start pattern
                         ret
 
-StartPatternCmd         ld iyl, b                         ; Form voice number as a 16-bit value in IY
+StartPatternCmd         ld iyl, d                         ; Form voice number as a 16-bit value in IY
                         ld iyh, 0
                         add iy, iy                        ; Voice bank addresses are 2 bytes. IY now holds offset for voice bank address table
                         ld bc, VoiceStatusLoc             ; BC is base of Voice bank address table
@@ -171,10 +171,14 @@ StartPatternCmd         ld iyl, b                         ; Form voice number as
                         ld (MusicMasterPC), ix            ; And store back into master PC
                         ret
 
-; BeatMaintainVoice. Called with IX pointing to voice's control block and D holding reversed voice number
+; BeatMaintainVoice. Called with HL pointing to voice's control block and B holding reversed voice number
 BeatMaintainVoice       ld a, NumVoices                   ; Put real voice number into D
                         sub b
                         ld d, a
+                        ld a, l                           ; BLEAUGH
+                        ld ixl, a
+                        ld a, h
+                        ld ixh, a
                         ld a,(ix+BeatCountdown)           ; Time for next pattern command?
                         cp 0
                         jp z, PatternCommand              ; Yes, go do it
