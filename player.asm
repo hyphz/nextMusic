@@ -105,7 +105,7 @@ MusicUpdate             ld a, (TempoWait)                 ; Load tempo counter
                         ld b, NumVoices                   ;     B is loop counter for checking {
 CheckVFrameMaint        ld a, (hl)                        ;         Load status byte for current voice
                         bit 1,a                           ;         Is bit 1 set?
-                        jp nz, NoFrameMaintenance         ;         No, this voice doesn't need frame maintenance
+                        jp z, NoFrameMaintenance         ;         No, this voice doesn't need frame maintenance
                         push hl                           ;         Save HL and BC (can't just save B, stack values have to be 16bit)
                         push bc
                         ; call FrameMaintainVoice         ;         Do frame maintenance (we don't know how yet ;) )
@@ -265,6 +265,8 @@ PatternPCOneByte        inc hl                            ;     HL now points to
 ; HL is address of current command, A is current command.
 runNoteCommand          and %01111111                     ; Mask off command indicator bit
                         jp z, PatternLoopCommand          ; Command 0, loop
+CommandPanic            jp CommandPanic
+
                         jp PatternPCOneByte               ; Invalid command, skip it
 
 PatternLoopCommand      ld bc, (ix+LoopPC)                ; Set patternPC to loopPC
@@ -321,12 +323,12 @@ Tempo                   db 13                              ; Number of frames pe
 
 music                   db 0, 0
                         dw pattern
-                        db 2, 1
-                        dw pattern
+                      ;  db 2, 1
+                      ;  dw pattern
                         db 255
 
 
-pattern                 db 0, 12, 1, 16, 1, 19, 1, 16, 1, %10000000
+pattern                 db 0, 12, 1, 16, 1, 19, 1, 24, 1, %10000000
 
 
 
@@ -334,6 +336,7 @@ pattern                 db 0, 12, 1, 16, 1, 19, 1, 16, 1, %10000000
 ; Stop planting code after this. (When generating a tape file we save bytes below here)
 AppLast                 equ *-1                         ; The last used byte's address
 
+                        mem_var VoiceStatusLoc, * - VoiceStatusLoc
 ; Generate some useful debugging commands
 
                         profile AppFirst,AppLast-AppFirst+1     ; Enable profiling for all the code
