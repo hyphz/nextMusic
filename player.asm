@@ -212,12 +212,14 @@ NextBeat                ld a, (Tempo)                     ; Load static tempo va
                         ld a, (BeatWait)                  ; Load delta timer for master command
                         sub 1                             ; Same trick as above to set carry
                         jp nc, NoMasterCmd                ; If it didn't overflow it wasn't 0, we are waiting, don't run master command
-                        ld a, 04
+ReptMasterCmd           ld a, 04
                         call SetBorder
                         call NextMasterCmd                ; Yes, We aren't waiting -> go run it
                                                           ; Back from doing master command, set delay for next master command
                         ld hl,(MusicMasterPC)             ; HL holds address of delay for next command
                         ld a,(hl)                         ; A holds delay for next command
+                        sub 1                             ; This is the first beat of current command
+                        jp c, ReptMasterCmd               ; On overflow it was 0 and should run NOW!
 NoMasterCmd             ld (BeatWait), a                  ; Put new delta wait (from command, or subtraction) back into delta timer
                                                           ; -- Do beat and frame maintenance on a beat frame
                         ld hl, VoiceStatusBank            ; HL is address of voice to check {
@@ -336,11 +338,11 @@ ReptPatternCommand      ld hl,(ix+PatternPC)              ; HL is address of cur
                                                           ; } HL is address of tuning values for this note {
                         ld a,d                            ;         AY fine tune register number is voice number * 2, get voice number
                         add a,a                           ;         Double it
-                        neg
+                        neg                               ; Negate and add 13 to get offset into buffer
                         add a, 13
-                        ld b, high(outputBuffer)
+                        ld b, high(outputBuffer)          ; Load up buffer address in BC
                         ld c, a
-                        ld a, (hl)
+                        ld a, (hl)                        ; Load coarse and fine tune registers in buffer
                         ld (bc), a
                         dec c
                         inc hl
@@ -367,9 +369,10 @@ FinishPatternCommand    ld a, 0
                         call SetBorder
                         ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
+                        sub 1                             ; This is the first beat of the new note, so count
+                                                          ; down one
                         ld (ix+BeatCountdown),a
-                        cp 0
-                        jp z, ReptPatternCommand
+                        jp c, ReptPatternCommand          ; If the countdown caused an overflow, it was a 0
                         ret
 
 ; ----------- Variables
@@ -406,6 +409,8 @@ notetable               db 16, 13, 84, 12, 163, 11, 252, 10, 94, 10, 201, 9, 68,
                         db 52, 0, 49, 0, 46, 0, 43, 0, 41, 0, 39, 0, 36, 0, 34, 0, 32, 0, 31, 0, 29, 0, 27, 0
                         db 26, 0, 24, 0, 23, 0, 21, 0, 20, 0, 19, 0, 18, 0, 17, 0, 16, 0, 15, 0, 14, 0, 13, 0
 
+
+
 notetableSeg            equ (notetable >> 8)
 
                         align $0100
@@ -420,36 +425,39 @@ Tempo                   db 7                              ; Number of frames per
 
 music                   db 0, 0
                         dw pattern_arp
-                        db 0, 1
-                        dw pattern_bass
-                        db 16, 2
+                       ; db 0, 1
+                       ; dw pattern_bass
+                        db 12, 2
                         dw pattern_mel
                       ;  db 2, 1
                       ;  dw pattern
                         db 255
 
 
-; c  c#  d  d#  e  f  g  g# a  a# b
-; 0  1   2  3   4  5  6  7  8  9  10
-; 11 12  13 14  15 16 17 18 19 20 21
-; 22 23  24 25  26 27 28 29 30 31 32
-; 33 34  35 36  37 38 39 40 41 42 43
-; 44 45  46 47  48 49 50 51 52 53 54
-; 55 56  57 58  59 60 61 62 63 64 65
-; 66 67  68 69  70 71 72 73 74 75 76
-; 77 78  79 80  81 82 83 84 85 86 87
+; c  c#  d  d#  e  f  f# g  g# a  a# b
+; 0  1   2  3   4  5  6  7  8  9  10 11
+; 12 13  14 15  16 17 18 19 20 21 22 23
+; 24 25  26 27  28 29 30 31 32 33 34 35
+; 36 37  38 39  40 41 42 43 44 45 46 47
+; 48 49  50 51  52 53 54 55 56 57 58 59
+; 60 61  62 63  64 65 66 67 68 69 70 71
+; 72 73  74 75  76 77 78 79 80 81 82 83
+; 84 85  86 87  88 89 90 91 92 93 94 95
 
 
-pattern_bass            db 0, 0, 4, 5, 4, 6, 4, $80
+failWaltz               db 0, 48, 4, 53, 8, 48, 4, 53, 8, $80
+
+
+pattern_bass            db 0, 12, 4, 17, 4, 19, 4, $80
 
 
 
-pattern_arp             db 0, 11, 1, 15, 1, 17, 1, 22
-                        db 1, 16, 1, 19, 1, 22, 1, 27
-                        db 1, 17, 1, 21, 1, 24, 1, 28
+pattern_arp             db 0, 12, 1, 16, 1, 19, 1, 24
+                        db 1, 17, 1, 21, 1, 24, 1, 29
+                        db 1, 19, 1, 23, 1, 26, 1, 31
                         db 1, $80
 
-pattern_mel             db 0, 48, 3, 46, 1, 46, 3, 44, 1, 46, 4, $80
+pattern_mel             db 0, 52, 3, 48, 1, 48, 3, 50, 1, 50, 2, 52, 1, 53, 1, 52, 3, 48, 1, 48, 3, 45, 1, 43, 4, $80
 
 
 
