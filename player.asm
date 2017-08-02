@@ -210,7 +210,7 @@ NextBeat                ld a, (Tempo)                     ; Load static tempo va
                         ld (TempoWait), a                 ; And resit tempo clock to it
                                                           ; -- Check if a master command is running this beat
                         ld a, (BeatWait)                  ; Load delta timer for master command
-                        sub 1                             ; Same trick as above to set carry
+CheckNextMaster         sub 1                             ; Same trick as above to set carry
                         jp nc, NoMasterCmd                ; If it didn't overflow it wasn't 0, we are waiting, don't run master command
 ReptMasterCmd           ld a, 04
                         call SetBorder
@@ -218,8 +218,8 @@ ReptMasterCmd           ld a, 04
                                                           ; Back from doing master command, set delay for next master command
                         ld hl,(MusicMasterPC)             ; HL holds address of delay for next command
                         ld a,(hl)                         ; A holds delay for next command
-                        sub 1                             ; This is the first beat of current command
-                        jp c, ReptMasterCmd               ; On overflow it was 0 and should run NOW!
+                        jp CheckNextMaster                ; Process it this frame
+
 NoMasterCmd             ld (BeatWait), a                  ; Put new delta wait (from command, or subtraction) back into delta timer
                                                           ; -- Do beat and frame maintenance on a beat frame
                         ld hl, VoiceStatusBank            ; HL is address of voice to check {
@@ -316,9 +316,8 @@ BeatMaintainVoice       ld a, NumVoices                   ; Get "real" voice num
                         ld a, h
                         ld ixh, a
                         ld a,(ix+BeatCountdown)           ; Time for next pattern command?
-                        cp 0
-                        jp z, PatternCommand              ; Yes, go do it
-                        dec a                             ; Nope, all we need to do is update beat countdown
+PatternReEntry          sub 1
+                        jp c, PatternCommand              ; Yes, go do it
                         ld (ix+BeatCountdown), a
                         ret                               ; And we're done
 
@@ -369,11 +368,7 @@ FinishPatternCommand    ld a, 0
                         call SetBorder
                         ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
-                        sub 1                             ; This is the first beat of the new note, so count
-                                                          ; down one
-                        ld (ix+BeatCountdown),a
-                        jp c, ReptPatternCommand          ; If the countdown caused an overflow, it was a 0
-                        ret
+                        jp PatternReEntry
 
 ; ----------- Variables
 
