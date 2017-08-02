@@ -131,10 +131,10 @@ MusicInit               ld a,%00111000                   ; Enable tone on all ch
                         ld (BeatWait), a
                         ret
 
-
-DumpBuffer              ld hl, outputBuffer
+; Update 1 - crank out data from buffer to ports.
+MusicUpdate             ld hl, outputBuffer               ; HL will be untouched through the process, moved on by OUTIs
                         ld bc, AyRegSelect                ; We should only need to load this once
-                        ld a, %11111111
+                        ld a, %11111111                   ; Turns on both stereo channels and selects AY1
                         out (bc),a                        ; Select AY1
                         ld d, 13                          ; Highest AY register
                         call DumpBufferLoop
@@ -159,14 +159,14 @@ DumpBuffer              ld hl, outputBuffer
                         out (bc),a                        ; Select SID
                         ld d, 22
                         call DumpBufferLoop
-NoNextSoundEmu          ret
+NoNextSoundEmu          jp FrameCycle
 
 DumpBufferLoop          ld b, high(AyRegSelect)           ; Cue up to select D'th register
-                        out (bc), d
+                        out (bc), d                       ; Select it
                         ld b, $c0                         ; Changes BC to register write, after the dec outi does
-                        outi
-                        dec d
-                        jp nz, DumpBufferLoop
+                        outi                              ; Write buffer value to register and increment HL
+                        dec d                             ; Count down register number (buffer has registers in reverse order)
+                        jp nz, DumpBufferLoop             ; If there are registers left, go back
                         ld b, high(AyRegSelect)           ; Last one with D=0
                         out (bc), d
                         ld b, $c0                         ; Changes BC to register write, after the dec outi does
@@ -177,8 +177,7 @@ DumpBufferLoop          ld b, high(AyRegSelect)           ; Cue up to select D't
 
 
 ; -- See if there's a beat this frame or not
-MusicUpdate             call DumpBuffer                   ; Send last frame's buffered data to chips
-                        ld a, (TempoWait)                 ; Load tempo counter
+FrameCycle              ld a, (TempoWait)                 ; Load tempo counter
                         sub 1                             ; Subtract one from it
                                                           ; (SUB takes 3 more states than DEC but sets the carry flag properly,
                                                           ; which saves us from doing a CP to test for zero, which would take 7 more)
@@ -190,11 +189,11 @@ MusicUpdate             call DumpBuffer                   ; Send last frame's bu
                         ld hl, VoiceStatusBank            ; HL is address of voice to check {
                         ld b, NumVoices                   ;     B is loop counter for checking {
 CheckVFrameMaint        ld a, (hl)                        ;         Load status byte for current voice
-                        bit 1,a                           ;         Is bit 1 set?
-                        jp z, NoFrameMaintenance         ;         No, this voice doesn't need frame maintenance
+                        or 0                              ;            Is voice active?
+                        jp z, NoFrameMaintenance          ;         No, this voice doesn't need frame maintenance
                         push hl                           ;         Save HL and BC (can't just save B, stack values have to be 16bit)
                         push bc
-                        ; call FrameMaintainVoice         ;         Do frame maintenance (we don't know how yet ;) )
+                        call FrameMaintainVoice           ;         Do frame maintenance (we don't know how yet ;) )
                         pop bc                            ;         Restore HL and BC
                         pop hl
 NoFrameMaintenance      ld de, VoiceSize                  ;         DE is distance to move HL ahead to next voice
@@ -225,26 +224,15 @@ NoMasterCmd             ld (BeatWait), a                  ; Put new delta wait (
                         ld hl, VoiceStatusBank            ; HL is address of voice to check {
                         ld b, NumVoices                   ;     B is loop counter for checking {
 CheckBeatMaint          ld a, (hl)                        ;         A is current voice's status byte {
-                        bit 0,a                           ;             Is bit 0 set?
-                        jp z, NextVoiceBeatMaint          ;             If not, Nothing needed (nothing would ever need frame but not beat maintenance)
-                        bit 1,a                           ;             Is bit 1 set?
-                        jp z, JustBeatMaintenance         ;             If not, Only beat maintenance needed
-                                                          ;         }
+                        or 0                              ;             Is bit 0 set?
+                        jp z, NoBeatMaintenance           ;             If not, Nothing needed (nothing would ever need frame but not beat maintenance)
                         push bc                           ;         Store HL and B
                         push hl                           ;
-                        ; call FrameMaintainVoice         ;         Yes, go do it (we don't know how yet.. ;) )
                         call BeatMaintainVoice            ;         Do beat maintenance
+                        call FrameMaintainVoice          ;         Yes, go do it (we don't know how yet.. ;) )
                         pop hl                            ;         Recover HL and B
                         pop bc
-                        jp NextVoiceBeatMaint             ;         Done with this voice
-JustBeatMaintenance     push bc                           ;         Do only beat maintenance
-                        push hl
-                        ld a, 05
-                        call SetBorder
-                        call BeatMaintainVoice
-                        pop hl
-                        pop bc
-NextVoiceBeatMaint      ld de, VoiceSize                  ;         DE is amount to advance HL to get next voice
+NoBeatMaintenance       ld de, VoiceSize                  ;         DE is amount to advance HL to get next voice
                         add hl, de                        ;         Advance to next voice
                         djnz CheckBeatMaint               ;         And loop
                                                           ;     }
@@ -369,6 +357,9 @@ FinishPatternCommand    ld a, 0
                         ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
                         jp PatternReEntry
+
+
+FrameMaintainVoice      ret
 
 ; ----------- Variables
 
