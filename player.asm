@@ -69,7 +69,8 @@ VoiceSize               equ .
 
                         org AppFirst                    ; Start of application
 
-AppEntry                call MusicInit
+AppEntry                ld sp, $ff46              ; Sync zeus and zesarux stack location
+                        call MusicInit
 TestLoop                ld a, 01
                         call SetBorder
                         call MusicUpdate
@@ -90,6 +91,8 @@ MusicInit               aysendabc(7, 56)
                         ld (MusicMasterPC), hl
                         ld a, 0                           ; Set initial tempoWait to 0 so music starts immediately
                         ld (TempoWait), a
+                        ld a, (hl)                        ; Set initial beatWait to delay for first command
+                        ld (BeatWait), a
                         ret
 
 
