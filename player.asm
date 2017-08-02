@@ -4,6 +4,8 @@
 
 ; Thanks:
 ; utz@SpecNext
+; Alcoholics Anonymous@SpecNext
+; Hikaru@SpecNext
 ; Matt Westcott
 ; Leeda Kifee
 ; Cesar Hernandez Bano for Zesarux
@@ -14,24 +16,57 @@ AppFirst                equ $8000                       ; First byte of code (un
 
                         zeusemulate "128K","ULA+"       ; Set the model and enable ULA+
 
-AyRegSelect             equ $fffd
+AyRegSelect             equ $fffd     ; On Next, this is also used for chip selection
 AyRegWrite              equ $bffd
 SetBorder               equ $229b
 PrintBC                 equ $1a1b
-KempstonJoystick        equ 31
+NextRegSelect           equ $243b     ; Only useful for changing audio mix
+NextRegWrite            equ $253b
 
+; Mostly just for reference, sound chip register numbers
 AyCoarseTuneA           equ 1
 AyFineTuneA             equ 0
 AyCoarseTuneB           equ 3
 AyFineTuneB             equ 2
 AyCoarseTuneC           equ 5
 AyFineTuneC             equ 4
+AyNoisePeriod           equ 6
+AyToneEnable            equ 7
 AyAmplitudeA            equ 8
 AyAmplitudeB            equ 9
 AyAmplitudeC            equ 10
 AyAmpPeriodFine         equ 11
 AyAmpPeriodCoarse       equ 12
 AyAmpShape              equ 13
+
+SidFineTuneA            equ 0
+SidCoarseTuneA          equ 1
+SidPulseLowA            equ 2
+SidPulseHighA           equ 3
+SidWaveformA            equ 4
+SidADA                  equ 5
+SidSRA                  equ 6
+SidFineTuneB            equ 7
+SidCoarseTuneB          equ 8
+SidPulseLowB            equ 9
+SidPulseHighB           equ 10
+SidWaveformB            equ 11
+SidADB                  equ 12
+SidSRB                  equ 13
+SidFineTuneC            equ 14
+SidCoarseTuneC          equ 15
+SidPulseLowC            equ 16
+SidPulseHighC           equ 17
+SidWaveformC            equ 18
+SidADC                  equ 19
+SidSRC                  equ 20
+SidFilterCutoffLow      equ 21
+SidFilterCutoffHigh     equ 22
+SidFilterResonance      equ 23
+SidVolume               equ 24
+
+
+
 
 NumVoices               equ 16
 
@@ -80,13 +115,14 @@ TestLoop                ld a, 01
                         jp TestLoop
 
 
-MusicInit               aysendabc(7, 56)
-                        aysendabc(AyAmplitudeA, %00010000)
-                        aysendabc(AyAmplitudeB, %00010000)
-                        aysendabc(AyAmplitudeC, %00010000)
-                        aysendabc(AyAmpPeriodFine, $01)
-                        aysendabc(AyAmpPeriodCoarse, $10)
-                        aysendabc(AyAmpShape, %00001000)
+MusicInit               ld a,%00111000                   ; Enable tone on all channels
+                        ld (outputBuffer+13-AyToneEnable), a
+                        ld a,%00001111
+                        ld (outputBuffer+13-AyAmplitudeA), a
+                        ld a,%00001111
+                        ld (outputBuffer+13-AyAmplitudeB), a
+                        ld a,%00001111
+                        ld (outputBuffer+13-AyAmplitudeC), a
                         ld hl, music                      ; Set musicPointer to address of start of music
                         ld (MusicMasterPC), hl
                         ld a, 0                           ; Set initial tempoWait to 0 so music starts immediately
@@ -96,8 +132,53 @@ MusicInit               aysendabc(7, 56)
                         ret
 
 
+DumpBuffer              ld hl, outputBuffer
+                        ld bc, AyRegSelect                ; We should only need to load this once
+                        ld a, %11111111
+                        out (bc),a                        ; Select AY1
+                        ld d, 13                          ; Highest AY register
+                        call DumpBufferLoop
+
+; DEBUG: If emulator doesn't pay attention to the Next chip select, we must stop here, or later
+; writes will overwrite values in the one chip that is emulated
+                        jp NoNextSoundEmu
+
+
+                        ld b, high(AyRegSelect)
+                        dec a
+                        out (bc),a                        ; Select AY2
+                        ld d, 13
+                        call DumpBufferLoop
+                        ld b, high(AyRegSelect)
+                        dec a
+                        out (bc),a                        ; Select AY3
+                        ld d, 13
+                        call DumpBufferLoop
+                        ld b, high(AyRegSelect)
+                        dec a
+                        out (bc),a                        ; Select SID
+                        ld d, 22
+                        call DumpBufferLoop
+NoNextSoundEmu          ret
+
+DumpBufferLoop          ld b, high(AyRegSelect)           ; Cue up to select D'th register
+                        out (bc), d
+                        ld b, $c0                         ; Changes BC to register write, after the dec outi does
+                        outi
+                        dec d
+                        jp nz, DumpBufferLoop
+                        ld b, high(AyRegSelect)           ; Last one with D=0
+                        out (bc), d
+                        ld b, $c0                         ; Changes BC to register write, after the dec outi does
+                        outi
+                        ret
+
+
+
+
 ; -- See if there's a beat this frame or not
-MusicUpdate             ld a, (TempoWait)                 ; Load tempo counter
+MusicUpdate             call DumpBuffer                   ; Send last frame's buffered data to chips
+                        ld a, (TempoWait)                 ; Load tempo counter
                         sub 1                             ; Subtract one from it
                                                           ; (SUB takes 3 more states than DEC but sets the carry flag properly,
                                                           ; which saves us from doing a CP to test for zero, which would take 7 more)
@@ -188,7 +269,7 @@ StartPatternCmd         ld a, d                           ; A is current voice n
                         add a, a                          ;     Now A is offset into voice status array
                         ld de, hl                         ;     We don't need D any more but we do need the command address, save in DE
                         ld l, a                           ;     VoiceStatus table is seg aligned so address low byte = offset
-                        ld h, VoiceStatusSeg              ;     HL is address of address of segment for this voice {
+                        ld h, high(VoiceStatusLoc)        ;     HL is address of address of segment for this voice {
                         ld c, (hl)                        ;         Copy two bytes of address from HL into BC
                         inc hl                            ;
                         ld b, (hl)                        ;     }
@@ -249,23 +330,22 @@ ReptPatternCommand      ld hl,(ix+PatternPC)              ; HL is address of cur
                         jp nz, runNoteCommand             ;         It's a command, not a note
                                                           ;         -- It's a note. Play it
                         push hl                           ;         We'll need the command address again
-                        ld h, notetableSeg                ;         Get segment address of note table
+                        ld h, high(notetable)             ;         Get segment address of note table
                         add a,a                           ;         Notes are 2 bytes, double to get offset in note table
                         ld l,a                            ;         Note table is segment aligned so just setting low bit finds location
                                                           ; } HL is address of tuning values for this note {
                         ld a,d                            ;         AY fine tune register number is voice number * 2, get voice number
                         add a,a                           ;         Double it
-                        ld bc, (AyRegSelect+$0100)        ;         BC is port address of AY register selector
-                        out (c), a                        ;         Send register selection
-                        ld d, a                           ;         Save register selection to use in a moment
-                        ld b, $c0                       ;         Only high byte changes to get register write port
-                        outi                              ;         Send (HL) to port BC (increments HL and clobbers B but we don't care..
-                        ld b, $00                         ;         .. because we're about to change it back to the reg select port again)
-                        ld a, d                           ;         Get the register number back
-                        inc a                             ;         Add 1 to it to get the coarse tune register
-                        out (c), a                        ;         Select coarse tune register
-                        ld b, $bf                         ;         Back to the register write port
-                        outi                              ;         And send the coarse tune value from the incremented HL
+                        neg
+                        add a, 13
+                        ld b, high(outputBuffer)
+                        ld c, a
+                        ld a, (hl)
+                        ld (bc), a
+                        dec c
+                        inc hl
+                        ld a, (hl)
+                        ld (bc),a
                                                           ; }
                         pop hl                            ; HL is address of current command {
 PatternPCOneByte        inc hl                            ;     HL now points to address of wait time of next command
@@ -301,7 +381,6 @@ VoiceStatusLoc          loop NumVoices
                            dw CurVoiceAddress
                            CurVoiceAddress = CurVoiceAddress + VoiceSize
                         lend
-VoiceStatusSeg          equ (VoiceStatusLoc >> 8)
 
 TempoWait               db 0                ; Counter for frames left before a beat
 BeatWait                db 00               ; Counter for beats left before master command
@@ -329,6 +408,12 @@ notetable               db 16, 13, 84, 12, 163, 11, 252, 10, 94, 10, 201, 9, 68,
 
 notetableSeg            equ (notetable >> 8)
 
+                        align $0100
+
+; Outputbuffer stores register outputs in REVERSE order (to make loop faster)
+outputBuffer            loop 67            ; 3 AYs (14 * 3) + 1 SID (25) = 67
+                          db 0
+                        lend
 
 
 Tempo                   db 13                              ; Number of frames per beat count
