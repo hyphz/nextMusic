@@ -104,6 +104,8 @@ MusicUpdate             ld a, (TempoWait)                 ; Load tempo counter
                         jp c, NextBeat                    ; If subtracting 1 overflowed, it was 0, so go process the beat
                         ld (TempoWait), a                 ; It didn't overflow. Store it back into TempoWait counter
                                                           ; -- No beat this frame. Do frame maintenance
+                        ld a, 03
+                        call SetBorder
                         ld hl, VoiceStatusBank            ; HL is address of voice to check {
                         ld b, NumVoices                   ;     B is loop counter for checking {
 CheckVFrameMaint        ld a, (hl)                        ;         Load status byte for current voice
@@ -129,6 +131,8 @@ NextBeat                ld a, (Tempo)                     ; Load static tempo va
                         ld a, (BeatWait)                  ; Load delta timer for master command
                         sub 1                             ; Same trick as above to set carry
                         jp nc, NoMasterCmd                ; If it didn't overflow it wasn't 0, we are waiting, don't run master command
+                        ld a, 04
+                        call SetBorder
                         call NextMasterCmd                ; Yes, We aren't waiting -> go run it
                                                           ; Back from doing master command, set delay for next master command
                         ld hl,(MusicMasterPC)             ; HL holds address of delay for next command
@@ -152,6 +156,8 @@ CheckBeatMaint          ld a, (hl)                        ;         A is current
                         jp NextVoiceBeatMaint             ;         Done with this voice
 JustBeatMaintenance     push bc                           ;         Do only beat maintenance
                         push hl
+                        ld a, 05
+                        call SetBorder
                         call BeatMaintainVoice
                         pop hl
                         pop bc
@@ -170,10 +176,10 @@ NextMasterCmd           ld hl, (MusicMasterPC)            ; HL is address of cur
                         ld a, d
                         and %11110000                     ;         A is current master musciop without voice number {
                         jp z, StartPatternCmd             ;              Check command. 0 = Start pattern
-                                                          ;         }
-                                                          ;     }
-                                                          ; }
-                        ret
+MasterCommandPanic      ld a, 04
+                        call SetBorder
+                        jp MasterCommandPanic
+
 
 ; -- Command to start a pattern playing on a voice.
 ; HL is address of command (NOT deltatime), D is current music op which is = voice number because command code is 0.
@@ -234,7 +240,9 @@ BeatMaintainVoice       ld a, NumVoices                   ; Get "real" voice num
                         ret                               ; And we're done
 
 ; PatternCommand. Called from BeatMaintainVoice with d holding voice number and ix holding base of voice status structure
-PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of current pattern deltatime
+PatternCommand          ld a, 06
+                        call SetBorder
+ReptPatternCommand      ld hl,(ix+PatternPC)              ; HL is address of current pattern deltatime
                         inc hl                            ; HL is address of current command {
                         ld a,(hl)                         ;     A is current command {
                         bit 7, a                          ;         Is MSB set?
@@ -247,12 +255,12 @@ PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of cur
                                                           ; } HL is address of tuning values for this note {
                         ld a,d                            ;         AY fine tune register number is voice number * 2, get voice number
                         add a,a                           ;         Double it
-                        ld bc, AyRegSelect                ;         BC is port address of AY register selector
+                        ld bc, (AyRegSelect+$0100)        ;         BC is port address of AY register selector
                         out (c), a                        ;         Send register selection
                         ld d, a                           ;         Save register selection to use in a moment
-                        ld b, $bf                       ;         Only high byte changes to get register write port
+                        ld b, $c0                       ;         Only high byte changes to get register write port
                         outi                              ;         Send (HL) to port BC (increments HL and clobbers B but we don't care..
-                        ld b, $ff                         ;         .. because we're about to change it back to the reg select port again)
+                        ld b, $00                         ;         .. because we're about to change it back to the reg select port again)
                         ld a, d                           ;         Get the register number back
                         inc a                             ;         Add 1 to it to get the coarse tune register
                         out (c), a                        ;         Select coarse tune register
@@ -270,17 +278,18 @@ runNoteCommand          and %01111111                     ; Mask off command ind
                         jp z, PatternLoopCommand          ; Command 0, loop
 CommandPanic            jp CommandPanic
 
-                        jp PatternPCOneByte               ; Invalid command, skip it
 
 PatternLoopCommand      ld bc, (ix+LoopPC)                ; Set patternPC to loopPC
                         ld (ix+PatternPC), bc
                         jp FinishPatternCommand           ; Since we just changed patternPC don't calculate it for "next" command
 
-FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for next command
+FinishPatternCommand    ld a, 0
+                        call SetBorder
+                        ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
                         ld (ix+BeatCountdown),a
                         cp 0
-                        jp z, PatternCommand
+                        jp z, ReptPatternCommand
                         ret
 
 ; ----------- Variables
@@ -331,13 +340,14 @@ music                   db 0, 0
                         db 255
 
 
-pattern                 db 0, 12, 1, 16, 1, 19, 1, 24, 1, %10000000
+pattern                 db 0, 12, 1, 16, 1, 19, 1, 24
+                        db 1, $80
 
 
 
 
 ; Stop planting code after this. (When generating a tape file we save bytes below here)
-AppLast                 equ *-1                         ; The last used byte's address
+AppLast                 equ *                           ; The last used byte's address
 
                         mem_var VoiceStatusLoc, * - VoiceStatusLoc
 ; Generate some useful debugging commands
