@@ -297,15 +297,16 @@ BeatMaintainVoice       ld a, NumVoices                   ; Get "real" voice num
                         ld ixl, a
                         ld a, h
                         ld ixh, a
+                        ld e, 0
                         ld a,(ix+BeatCountdown)           ; Time for next pattern command?
 PatternReEntry          sub 1
                         jp c, PatternCommand              ; Yes, go do it
                         ld (ix+BeatCountdown), a
+                        or 0                              ; Is beat countdown now 0 (this was last beat?)
+                        ret nz                            ; No, we're done
+                        ld a, e                           ; Was a single beat note played this beat?
                         or 0
-                        ret nz
-                        ld a, d
-                        or 0
-                        ret nz
+                        ret nz                            ; Yes, it's using single beat pattern
                         ld hl, (ix+Instrument)            ; Last beat of note. Need to change to release pattern
                         inc hl
                         inc hl
@@ -347,14 +348,15 @@ PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of cur
 PatternPCOneByte        inc hl                            ; HL now points to address of wait time of next command
                         ld (ix+PatternPC), hl             ; It's the new music PC
                         ld a, (hl)                        ; Get next note wait. Is it 1?
-                        sub 1
-                        ld hl, (ix+Instrument)            ; ALso need to reset amplitude PC for instrument
-                        ld a, (hl)
-                        ld d, 0
-                        jp nz, MoreThanOneBeat
-                        add a, 4
-                        ld d, 1
-MoreThanOneBeat         ld (ix+AmplitudePC), a
+                        sub 1                             ; We'll use this in a moment
+                        ld hl, (ix+Instrument)            ; HL is address of instrument structure
+                        ld e, 0                           ; Clear one beat flag
+                        jp nz, MoreThanOneBeat            ; If next note wait wasn't 1, skip..
+                        ld de, 4                          ; Add 4 to HL to point at one beat amp table address
+                        add hl, de
+                        ld e,1                            ; Set one beat flag
+MoreThanOneBeat         ld a, (hl)                        ; Copy amp table address from instrument
+                        ld (ix+AmplitudePC), a
                         inc hl
                         ld a, (hl)
                         ld (ix+AmplitudePC+1), a
@@ -471,22 +473,26 @@ ampPointer              dw 0
 
 
 
-BasicAmpCurve           db $00:dw .+2
-                        db $05:dw .+2
+BasicAmpCurve           db $05:dw .+2
                         db $0f:dw .+2
+                        db $0c:dw .+2
                         db $0c:dw .-1
 
 BasicRelease            db $0c:dw .+2
+                        db $0c:dw .+2
+                        db $0c:dw .+2
+                        db $0c:dw .+2
+                        db $0c:dw .+2
                         db $05:dw .+2
                         db $00:dw .-1
 
-OneBeatCurve            db $0f:dw .+2
+OneBeatCurve            db $05:dw .+2
                         db $0f:dw .+2
-                        db $0f:dw .+2
-                        db $0f:dw .-1
-                        db $0f:dw .+2
-                        db $0f:dw .+2
-                        db $0f:dw .-1
+                        db $0c:dw .+2
+                        db $0c:dw .-1
+                        db $0c:dw .+2
+                        db $0c:dw .+2
+                        db $05:dw .-1
 
 
 
