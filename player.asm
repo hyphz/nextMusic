@@ -65,29 +65,7 @@ SidFilterCutoffHigh     equ 22
 SidFilterResonance      equ 23
 SidVolume               equ 24
 
-
-
-
 NumVoices               equ 16
-
-out16bc                 macro(port, val)            ; Outputs on 16 bit port address
-                        ld bc, port
-                        out (c), val
-                        mend
-
-in16bca                 macro(port)                 ; Inputs to A from 16 bit port address
-                        ld bc, port
-                        in a,(c)
-                        mend
-
-aysendabc               macro(reg, val)             ; Sends val to AY register reg
-                        ld a, reg
-                        ld bc, AyRegSelect
-                        out (c), a
-                        ld b, $bf                   ; C is the same, $fd
-                        ld a, val
-                        out (c), a
-                        mend
 
                         struct
 UpdateStatus            ds 1
@@ -95,22 +73,34 @@ PatternPC               ds 2
 LoopPC                  ds 2
 BeatCountdown           ds 1
 Stage                   ds 1
-StageCounter            ds 2
+Instrument              ds 2
+AmplitudePC             ds 2
 VoiceSize               equ .
                         send
+
+                        struct
+AmplitudeCurve          ds 2
+EndAmplitudeCurve       ds 2
+InstrumentSize          equ .
+                        send
+
+                        struct
+AY1Buffer               ds 14
+AY2Buffer               ds 14
+AY3Buffer               ds 14
+SIDBuffer               ds 25
+BufferSize              equ .
+                        send
+
 
 
 ; Start planting code here. (When generating a tape file we start saving from here)
 
                         org AppFirst                    ; Start of application
 
-AppEntry                ld sp, $ff46              ; Sync zeus and zesarux stack location
+AppEntry                ld sp, $ff46                    ; Sync zeus and zesarux stack location
                         call MusicInit
-TestLoop                ld a, 01
-                        call SetBorder
-                        call MusicUpdate
-                        ld a, 02
-                        call SetBorder
+TestLoop                call MusicUpdate
                         halt
                         jp TestLoop
 
@@ -184,8 +174,6 @@ FrameCycle              ld a, (TempoWait)                 ; Load tempo counter
                         jp c, NextBeat                    ; If subtracting 1 overflowed, it was 0, so go process the beat
                         ld (TempoWait), a                 ; It didn't overflow. Store it back into TempoWait counter
                                                           ; -- No beat this frame. Do frame maintenance
-                        ld a, 03
-                        call SetBorder
                         ld hl, VoiceStatusBank            ; HL is address of voice to check {
                         ld b, NumVoices                   ;     B is loop counter for checking {
 CheckVFrameMaint        ld a, (hl)                        ;         Load status byte for current voice
@@ -211,9 +199,7 @@ NextBeat                ld a, (Tempo)                     ; Load static tempo va
                         ld a, (BeatWait)                  ; Load delta timer for master command
 CheckNextMaster         sub 1                             ; Same trick as above to set carry
                         jp nc, NoMasterCmd                ; If it didn't overflow it wasn't 0, we are waiting, don't run master command
-ReptMasterCmd           ld a, 04
-                        call SetBorder
-                        call NextMasterCmd                ; Yes, We aren't waiting -> go run it
+ReptMasterCmd           call NextMasterCmd                ; Yes, We aren't waiting -> go run it
                                                           ; Back from doing master command, set delay for next master command
                         ld hl,(MusicMasterPC)             ; HL holds address of delay for next command
                         ld a,(hl)                         ; A holds delay for next command
@@ -226,12 +212,12 @@ NoMasterCmd             ld (BeatWait), a                  ; Put new delta wait (
 CheckBeatMaint          ld a, (hl)                        ;         A is current voice's status byte {
                         or 0                              ;             Is bit 0 set?
                         jp z, NoBeatMaintenance           ;             If not, Nothing needed (nothing would ever need frame but not beat maintenance)
-                        push bc                           ;         Store HL and B
-                        push hl                           ;
+                        push bc, hl                       ;         Store HL and B                                               ;
                         call BeatMaintainVoice            ;         Do beat maintenance
-                        call FrameMaintainVoice          ;         Yes, go do it (we don't know how yet.. ;) )
-                        pop hl                            ;         Recover HL and B
-                        pop bc
+                        pop hl, bc
+                        push bc, hl
+                        call FrameMaintainVoice           ;         Yes, go do it (we don't know how yet.. ;) )
+                        pop hl, bc                        ;         Recover HL and B
 NoBeatMaintenance       ld de, VoiceSize                  ;         DE is amount to advance HL to get next voice
                         add hl, de                        ;         Advance to next voice
                         djnz CheckBeatMaint               ;         And loop
@@ -255,39 +241,47 @@ MasterCommandPanic      ld a, 04
 ; -- Command to start a pattern playing on a voice.
 ; HL is address of command (NOT deltatime), D is current music op which is = voice number because command code is 0.
 ; No postcondition obligations.
-StartPatternCmd         ld a, d                           ; A is current voice number { (since high bits for start command are 0)
-                        add a, a                          ;     Now A is offset into voice status array
-                        ld de, hl                         ;     We don't need D any more but we do need the command address, save in DE
-                        ld l, a                           ;     VoiceStatus table is seg aligned so address low byte = offset
-                        ld h, high(VoiceStatusLoc)        ;     HL is address of address of segment for this voice {
-                        ld c, (hl)                        ;         Copy two bytes of address from HL into BC
-                        inc hl                            ;
-                        ld b, (hl)                        ;     }
-                                                          ; }
-                                                          ; BC is address of segment for this voice
-                        ld hl, bc                         ; HL is address of segment for this voice {
-                        ld a, (hl)                        ;     Get voice status byte
-                        set 0, a                          ;     It needs beat maintenance now.
-                        ld (hl), a                        ;     Store that fact in voice status byte
-                        inc de                            ;     DE is address of pattern address {
-                        push de                           ;         We'll need that again in a moment
-                        inc hl                            ;         Now HL is address of Pattern PC value in voice status structure
-                        ex de, hl                         ;         Switch these to allow ldi to work
-                        ldi                               ;         Copy 2 bytes of pattern address from HL to DE
-                        ldi                               ;         (This clobbers BC but we're not using it)
-                        pop hl                            ;         Reset source address to copy it again to Loop PC
-                        push hl                           ;         We still need that again
-                        ldi
-                        ldi
-                        pop hl                            ;         We need the address of the pattern address for the last time
-                        ld c, (hl)                        ;         Copy the address to BC so BC is address of the actual pattern
+StartPatternCmd         ld a, d                           ; A is current voice number (since high bits for start command are 0)
+                        add a, a                          ; Now A is offset into voice status array
+                        ld de, hl                         ; Copy address of the command into DE
+                        ld c, a                           ; VoiceLoc table is seg aligned so address low byte = offset
+                        ld b, high(VoiceStatusLoc)        ; BC is address of address of segment for this voice
+                        ld a, (bc)                        ; Copy two bytes of address into HL
+                        ld l, a
+                        inc bc
+                        ld a, (bc)                        ;
+                        ld h, a                           ; Now HL is address of status segment for this voice
+                        ld a, 1                           ; Mark voice active (active flag is offset 0)
+                        ld (hl), a                        ;
+                        inc de                            ; DE is now address of pattern address
+                        inc hl                            ; HL is now address of Pattern PC in voice segment
+                        ex de, hl                         ; Switch these to allow ldi to work
+                        push hl                           ; Store address of pattern address on stack
+                        ldi                               ; Copy 2 bytes of pattern address from HL to DE
+                        ldi                               ; (This clobbers BC, but we're not using it)
+                        pop hl                            ; Reset source address to copy it again to Loop PC
+                        push hl                           ;
+                        ldi                               ; Copy pattern address to loop PC
+                        ldi                               ;
+                        pop hl                            ; We need the address of the pattern address for the last time
+                        ld c, (hl)                        ; Copy the address to BC so BC is address of the actual pattern
                         inc hl
                         ld b, (hl)
-                        ld a,(bc)                         ;         A is first byte of the pattern, which will be the initial deltatime
-                        ld (de), a                        ;         After all those LDIs DE will be pointing to the byte AFTER the
-                                                          ;         Loop PC which is the beat counter
-                                                          ;     }
-                                                          ; }
+                        ld a,(bc)                         ; A is first byte of the pattern, which will be the initial deltatime
+                        ld (de), a                        ; After all those LDIs, DE points to beat countdown
+                        inc de                            ; Start new pattern at stage 0
+                        ld a, 0
+                        ld (de), a
+                        inc de                            ; Now DE points to instrument address
+                        ld hl, BasicInstrument            ; Set to basic instrument
+                        ld a,l
+                        ld (de), a
+                        inc de
+                        ld a,h
+                        ld (de), a
+                        inc de
+                        ldi                               ; HL points to basic instrument start, DE points to instrument PC
+                        ldi
                         ld hl, (MusicMasterPC)            ; Move master PC on by 4 bytes
                         ld bc, 4
                         add hl, bc
@@ -307,12 +301,25 @@ BeatMaintainVoice       ld a, NumVoices                   ; Get "real" voice num
 PatternReEntry          sub 1
                         jp c, PatternCommand              ; Yes, go do it
                         ld (ix+BeatCountdown), a
+                        or 0
+                        ret nz
+                        ld a, d
+                        or 0
+                        ret nz
+                        ld hl, (ix+Instrument)            ; Last beat of note. Need to change to release pattern
+                        inc hl
+                        inc hl
+                        ld a, (hl)
+                        ld (ix+AmplitudePC), a
+                        inc hl
+                        ld a, (hl)
+                        ld (ix+AmplitudePC+1), a
                         ret                               ; And we're done
 
+
+
 ; PatternCommand. Called from BeatMaintainVoice with d holding voice number and ix holding base of voice status structure
-PatternCommand          ld a, 06
-                        call SetBorder
-ReptPatternCommand      ld hl,(ix+PatternPC)              ; HL is address of current pattern deltatime
+PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of current pattern deltatime
                         inc hl                            ; HL is address of current command {
                         ld a,(hl)                         ;     A is current command {
                         bit 7, a                          ;         Is MSB set?
@@ -337,8 +344,20 @@ ReptPatternCommand      ld hl,(ix+PatternPC)              ; HL is address of cur
                         ld (bc),a
                                                           ; }
                         pop hl                            ; HL is address of current command {
-PatternPCOneByte        inc hl                            ;     HL now points to address of wait time of next command
-                        ld (ix+PatternPC), hl             ;     It's the new music PC
+PatternPCOneByte        inc hl                            ; HL now points to address of wait time of next command
+                        ld (ix+PatternPC), hl             ; It's the new music PC
+                        ld a, (hl)                        ; Get next note wait. Is it 1?
+                        sub 1
+                        ld hl, (ix+Instrument)            ; ALso need to reset amplitude PC for instrument
+                        ld a, (hl)
+                        ld d, 0
+                        jp nz, MoreThanOneBeat
+                        add a, 4
+                        ld d, 1
+MoreThanOneBeat         ld (ix+AmplitudePC), a
+                        inc hl
+                        ld a, (hl)
+                        ld (ix+AmplitudePC+1), a
                         jp FinishPatternCommand           ; }
 
 ; runNoteCommand. Called from PatternCommand if command is knnown to be a non-note.
@@ -358,8 +377,32 @@ FinishPatternCommand    ld a, 0
                         ld a,(bc)
                         jp PatternReEntry
 
-
-FrameMaintainVoice      ret
+; Called with HL = address of voice status block, B is inverted voice number.
+; Voice is known to be active.
+; Note - this potentially runs 16 times per frame. It should probably be optimized ;)
+FrameMaintainVoice      ld a, b                    ; Double inverted voice number for index into amp location table
+                        dec a
+                        ld de, hl                  ; Store HL for the moment
+                        add a, a
+                        ld l, a                    ; HL is address of address of amplitude buffer value
+                        ld h, high(ampPointer)
+                        ld c, (hl)
+                        inc hl
+                        ld b, (hl)                 ; BC is now address of amplitude output byte for this voice
+                        ld hl, de                  ; Get back the voice status block address we saved earlier
+                        ld de, AmplitudePC
+                        add hl, de                 ; HL now points to amplitude PC in voice status block
+                        ld e, (hl)                 ; Get address of actual amplitude value
+                        inc hl
+                        ld d, (hl)
+                        ld a, (de)                 ; Get actual amplitude value
+                        ld (bc), a                 ; Store it in amplitude byte
+                        dec hl                     ; Move HL back to start of amplitude PC value
+                        inc de                     ; Move DE on to linked list pointer in amplitude
+                        ex de, hl                  ; Swap these two
+                        ldi                        ; Copy linked list pointer into amplitude PC value
+                        ldi
+                        ret
 
 ; ----------- Variables
 
@@ -393,7 +436,7 @@ notetable               db 16, 13, 84, 12, 163, 11, 252, 10, 94, 10, 201, 9, 68,
                         db 186, 0, 175, 0, 165, 0, 156, 0, 147, 0, 139, 0, 131, 0, 124, 0, 117, 0, 110, 0
                         db 104, 0, 98, 0, 93, 0, 87, 0, 82, 0, 78, 0, 73, 0, 69, 0, 65, 0, 62, 0, 58, 0, 55, 0
                         db 52, 0, 49, 0, 46, 0, 43, 0, 41, 0, 39, 0, 36, 0, 34, 0, 32, 0, 31, 0, 29, 0, 27, 0
-                        db 26, 0, 24, 0, 23, 0, 21, 0, 20, 0, 19, 0, 18, 0, 17, 0, 16, 0, 15, 0, 14, 0, 13, 0
+                        db 26, 0, 24, 0, 23, 0, 21, 0, 20, 0, 19, 0, 18, 0, 17, 0, 16, 0, 15, 0, 14, 0, 13, 0, 0, 0
 
 
 
@@ -402,9 +445,53 @@ notetableSeg            equ (notetable >> 8)
                         align $0100
 
 ; Outputbuffer stores register outputs in REVERSE order (to make loop faster)
-outputBuffer            loop 67            ; 3 AYs (14 * 3) + 1 SID (25) = 67
+outputBuffer            loop BufferSize           ; 3 AYs (14 * 3) + 1 SID (25) = 67
                           db 0
                         lend
+
+; Quick reference to amplitude positions in output buffer based on inverted voice number
+                        align $0100
+ampPointer              dw 0
+                        dw outputBuffer + SIDBuffer
+                        dw outputBuffer + SIDBuffer
+                        dw outputBuffer + SIDBuffer
+                        dw 0
+                        dw outputBuffer + AY3Buffer + (13 - AyAmplitudeC)
+                        dw outputBuffer + AY3Buffer + (13 - AyAmplitudeB)
+                        dw outputBuffer + AY3Buffer + (13 - AyAmplitudeA)
+                        dw 0
+                        dw outputBuffer + AY2Buffer + (13 - AyAmplitudeC)
+                        dw outputBuffer + AY2Buffer + (13 - AyAmplitudeB)
+                        dw outputBuffer + AY2Buffer + (13 - AyAmplitudeA)
+                        dw 0
+                        dw outputBuffer + AY1Buffer + (13 - AyAmplitudeC)
+                        dw outputBuffer + AY1Buffer + (13 - AyAmplitudeB)
+                        dw outputBuffer + AY1Buffer + (13 - AyAmplitudeA)
+
+
+
+
+BasicAmpCurve           db $00:dw .+2
+                        db $05:dw .+2
+                        db $0f:dw .+2
+                        db $0c:dw .-1
+
+BasicRelease            db $0c:dw .+2
+                        db $05:dw .+2
+                        db $00:dw .-1
+
+OneBeatCurve            db $0f:dw .+2
+                        db $0f:dw .+2
+                        db $0f:dw .+2
+                        db $0f:dw .-1
+                        db $0f:dw .+2
+                        db $0f:dw .+2
+                        db $0f:dw .-1
+
+
+
+
+BasicInstrument         dw BasicAmpCurve, BasicRelease, OneBeatCurve
 
 
 Tempo                   db 7                              ; Number of frames per beat count
