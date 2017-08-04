@@ -9,6 +9,7 @@
 ; Matt Westcott
 ; Leeda Kifee
 ; Cesar Hernandez Bano for Zesarux
+; Neil Mottersheand and Simon Brattel for Zeus (apart from the *-1 thing)
 
 AppFilename             equ "player"                   ; What we're called (for file generation)
 
@@ -486,6 +487,10 @@ BasicRelease            db $0c:dw .+2
                         db $05:dw .+2
                         db $00:dw .-1
 
+SawtoothMaybe           db $0c:dw .+2
+                        db $0e:dw .+2
+                        db $0f:dw SawtoothMaybe
+
 OneBeatCurve            db $05:dw .+2
                         db $0f:dw .+2
                         db $0c:dw .+2
@@ -497,7 +502,7 @@ OneBeatCurve            db $05:dw .+2
 
 
 
-BasicInstrument         dw BasicAmpCurve, BasicRelease, OneBeatCurve
+BasicInstrument         dw SawtoothMaybe, BasicRelease, OneBeatCurve
 
 
 Tempo                   db 7                              ; Number of frames per beat count
