@@ -364,19 +364,47 @@ MoreThanOneBeat         ld a, (hl)                        ; Copy amp table addre
                         jp FinishPatternCommand           ; }
 
 ; runNoteCommand. Called from PatternCommand if command is knnown to be a non-note.
-; HL is address of current command, A is current command.
+; HL is address of current command, A is current command, D is voice number.
 runNoteCommand          and %01111111                     ; Mask off command indicator bit
-                        jp z, PatternLoopCommand          ; Command 0, loop
+                        add a, a
+                        push hl
+                        ld hl, CommandVectorTable
+                        ld b, 0
+                        ld c, a
+                        add hl, bc
+                        ld c, (hl)
+                        inc hl
+                        ld b, (hl)
+                        ld hl, bc
+                        jp (hl)                           ; Poor man's switch statement
+
 CommandPanic            jp CommandPanic
 
+CommandVectorTable      dw PatternLoopCommand, SetLoopCommand, SetInstrumentCommand
 
-PatternLoopCommand      ld bc, (ix+LoopPC)                ; Set patternPC to loopPC
+
+PatternLoopCommand      pop hl                            ; We don't need it in this case
+                        ld bc, (ix+LoopPC)                ; Set patternPC to loopPC
                         ld (ix+PatternPC), bc
                         jp FinishPatternCommand           ; Since we just changed patternPC don't calculate it for "next" command
 
-FinishPatternCommand    ld a, 0
-                        call SetBorder
-                        ld bc,(ix+PatternPC)              ; Get wait value for next command
+SetLoopCommand          pop hl
+                        inc hl
+                        ld (ix+LoopPC), hl
+                        ld (ix+PatternPC), hl
+                        jp FinishPatternCommand
+
+SetInstrumentCommand    pop hl
+                        inc hl
+                        ld c, (hl)
+                        inc hl
+                        ld b, (hl)
+                        inc hl
+                        ld (ix+Instrument), bc
+                        ld (ix+PatternPC), hl
+                        jp FinishPatternCommand
+
+FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
                         jp PatternReEntry
 
@@ -402,9 +430,24 @@ FrameMaintainVoice      ld a, b                    ; Double inverted voice numbe
                         ld (bc), a                 ; Store it in amplitude byte
                         dec hl                     ; Move HL back to start of amplitude PC value
                         inc de                     ; Move DE on to linked list pointer in amplitude
-                        ex de, hl                  ; Swap these two
-                        ldi                        ; Copy linked list pointer into amplitude PC value
-                        ldi
+                        ld bc, hl                  ; We need HL to do addition in a moment
+                        ld a,(bc)                  ; Get existing amplitude PC value into HL
+                        ld l,a
+                        inc bc
+                        ld a,(bc)
+                        ld h,a
+                        ld a,(de)                  ; Get linked list pointer offset in A
+                        dec bc
+                        ld e, a                    ; Extend linked list pointer to a 16-bit number
+                        rla                        ; (Thanks Hikaru@SpecNext)
+                        sbc a
+                        ld d, a
+                        add hl, de                 ; Add it to existing linked list pointer
+                        ld de, bc                  ; Move address of amplitude PC into DE
+                        ex de, hl                  ; Then swap it into HL
+                        ld (hl),e
+                        inc hl
+                        ld (hl),d
                         ret
 
 ; ----------- Variables
@@ -474,35 +517,37 @@ ampPointer              dw 0
 
 
 
-BasicAmpCurve           db $05:dw .+2
-                        db $0f:dw .+2
-                        db $0c:dw .+2
-                        db $0c:dw .-1
+BasicAmpCurve           db $05, 2
+                        db $0f, 2
+                        db $0c, 2
+                        db $0c, 0
 
-BasicRelease            db $0c:dw .+2
-                        db $0c:dw .+2
-                        db $0c:dw .+2
-                        db $0c:dw .+2
-                        db $0c:dw .+2
-                        db $05:dw .+2
-                        db $00:dw .-1
+BasicRelease            db $0c,2
+                        db $0c,2
+                        db $0c,2
+                        db $0c,2
+                        db $0c,2
+                        db $05,2
+                        db $00,0
 
-SawtoothMaybe           db $0c:dw .+2
-                        db $0e:dw .+2
-                        db $0f:dw SawtoothMaybe
+SawtoothMaybe           db $0c, 2
+                        db $0e, 2
+                        db $0f, -4
 
-OneBeatCurve            db $05:dw .+2
-                        db $0f:dw .+2
-                        db $0c:dw .+2
-                        db $0c:dw .-1
-                        db $0c:dw .+2
-                        db $0c:dw .+2
-                        db $05:dw .-1
-
-
+OneBeatCurve            db $05, 2
+                        db $0f, 2
+                        db $0c, 2
+                        db $0c,2
+                        db $0c,2
+                        db $0c,2
+                        db $05,0
 
 
-BasicInstrument         dw SawtoothMaybe, BasicRelease, OneBeatCurve
+
+
+BasicInstrument         dw BasicAmpCurve, BasicRelease, OneBeatCurve
+SawInstrument           dw SawtoothMaybe, SawtoothMaybe, SawtoothMaybe
+
 
 
 Tempo                   db 7                              ; Number of frames per beat count
@@ -541,7 +586,14 @@ pattern_arp             db 0, 12, 1, 16, 1, 19, 1, 24
                         db 1, 19, 1, 23, 1, 26, 1, 31
                         db 1, $80
 
-pattern_mel             db 0, 52, 3, 48, 1, 48, 3, 50, 1, 50, 2, 52, 1, 53, 1, 52, 3, 48, 1, 48, 3, 45, 1, 43, 4, $80
+pattern_mel             db 0, $82: dw BasicInstrument
+                        db 0, 52
+                        db 3, 48
+                        db 1, 48
+                        db 3, 50
+                        db 1, 50
+                        db 0, $82: dw SawInstrument
+                        db 2, 52, 1, 53, 1, 52, 3, 48, 1, 48, 3, 45, 1, 43, 4, $80
 
 
 
