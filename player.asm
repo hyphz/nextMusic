@@ -86,9 +86,9 @@ InstrumentSize          equ .
                         send
 
                         struct
-AY1Buffer               ds 14
-AY2Buffer               ds 14
-AY3Buffer               ds 14
+AY1Buffer               ds 16 ; AY actually has 14 registers. But pad to 16 to make the math easier
+AY2Buffer               ds 16
+AY3Buffer               ds 16
 SIDBuffer               ds 25
 BufferSize              equ .
                         send
@@ -107,13 +107,13 @@ TestLoop                call MusicUpdate
 
 
 MusicInit               ld a,%00111000                   ; Enable tone on all channels
-                        ld (outputBuffer+13-AyToneEnable), a
+                        ld (outputBuffer+15-AyToneEnable), a
                         ld a,%00001111
-                        ld (outputBuffer+13-AyAmplitudeA), a
+                        ld (outputBuffer+15-AyAmplitudeA), a
                         ld a,%00001111
-                        ld (outputBuffer+13-AyAmplitudeB), a
+                        ld (outputBuffer+15-AyAmplitudeB), a
                         ld a,%00001111
-                        ld (outputBuffer+13-AyAmplitudeC), a
+                        ld (outputBuffer+15-AyAmplitudeC), a
                         ld hl, music                      ; Set musicPointer to address of start of music
                         ld (MusicMasterPC), hl
                         ld a, 0                           ; Set initial tempoWait to 0 so music starts immediately
@@ -123,7 +123,7 @@ MusicInit               ld a,%00111000                   ; Enable tone on all ch
                         ret
 
 ; Update 1 - crank out data from buffer to ports.
-MusicUpdate             ld hl, outputBuffer               ; HL will be untouched through the process, moved on by OUTIs
+MusicUpdate             ld hl, outputBuffer+2             ; Skip two fake registers at the start of AY block
                         ld bc, AyRegSelect                ; We should only need to load this once
                         ld a, %11111111                   ; Turns on both stereo channels and selects AY1
                         out (bc),a                        ; Select AY1
@@ -133,18 +133,21 @@ MusicUpdate             ld hl, outputBuffer               ; HL will be untouched
 ; DEBUG: If emulator doesn't pay attention to the Next chip select, we must stop here, or later
 ; writes will overwrite values in the one chip that is emulated
                         jp NoNextSoundEmu
-
-
+                        ld hl, outputBuffer+AY1Buffer+2
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select AY2
                         ld d, 13
                         call DumpBufferLoop
+
+                        ld hl, outputBuffer+AY2Buffer+2
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select AY3
                         ld d, 13
                         call DumpBufferLoop
+
+                        ld hl, outputBuffer+AY3Buffer
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select SID
@@ -342,15 +345,15 @@ PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of cur
                         jp z, ChipOffsetDone              ; Voice/4 = 0, it's AY1, no worries
                         cp 3
                         jp z, SidWrite                    ; It's the SID, that will require a new routine
-                        ld c, 14                          ; It's 1 or 2. If it's 1, chip shift is 14
+                        ld c, 16                          ; It's 1 or 2. If it's 1, chip shift is 14
                         cp 2                              ; Is it 2?
                         jp nz, ChipOffsetDone             ; No, we're done
-                        ld c, 28                          ; It's 2. Chip shift is 28
+                        ld c, 32                          ; It's 2. Chip shift is 28
 
 ChipOffsetDone          ld a,d                            ; AY fine tune register number is voice number * 2, get voice number
                         add a,a                           ; Double it
                         neg                               ; Negate and add 13 to get offset into buffer
-                        add a, 13
+                        add a, 15
                         add a, c                          ; Add chip shift
                         ld b, high(outputBuffer)          ; Load up buffer address in BC
                         ld c, a
@@ -527,17 +530,17 @@ ampPointer              dw 0
                         dw outputBuffer + SIDBuffer
                         dw outputBuffer + SIDBuffer
                         dw 0
-                        dw outputBuffer + AY3Buffer + (13 - AyAmplitudeC)
-                        dw outputBuffer + AY3Buffer + (13 - AyAmplitudeB)
-                        dw outputBuffer + AY3Buffer + (13 - AyAmplitudeA)
+                        dw outputBuffer + AY3Buffer + (15 - AyAmplitudeC)
+                        dw outputBuffer + AY3Buffer + (15 - AyAmplitudeB)
+                        dw outputBuffer + AY3Buffer + (15 - AyAmplitudeA)
                         dw 0
-                        dw outputBuffer + AY2Buffer + (13 - AyAmplitudeC)
-                        dw outputBuffer + AY2Buffer + (13 - AyAmplitudeB)
-                        dw outputBuffer + AY2Buffer + (13 - AyAmplitudeA)
+                        dw outputBuffer + AY2Buffer + (15 - AyAmplitudeC)
+                        dw outputBuffer + AY2Buffer + (15 - AyAmplitudeB)
+                        dw outputBuffer + AY2Buffer + (15 - AyAmplitudeA)
                         dw 0
-                        dw outputBuffer + AY1Buffer + (13 - AyAmplitudeC)
-                        dw outputBuffer + AY1Buffer + (13 - AyAmplitudeB)
-                        dw outputBuffer + AY1Buffer + (13 - AyAmplitudeA)
+                        dw outputBuffer + AY1Buffer + (15 - AyAmplitudeC)
+                        dw outputBuffer + AY1Buffer + (15 - AyAmplitudeB)
+                        dw outputBuffer + AY1Buffer + (15 - AyAmplitudeA)
 
 
 
