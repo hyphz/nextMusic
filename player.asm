@@ -337,23 +337,14 @@ PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of cur
                                                           ; HL is address of tuning values for this note
 
                         ld a,d                            ; Which chip is this voice on?
-                        rra                               ; Roll accumulator twice to divide by 4
-                        rra
-                        and %00000011                     ; Mask off rolled over bits
-                                                          ; (This, strangely, is faster than just shifting)
-                        ld c,0
-                        jp z, ChipOffsetDone              ; Voice/4 = 0, it's AY1, no worries
-                        cp 3
-                        jp z, SidWrite                    ; It's the SID, that will require a new routine
-                        ld c, 16                          ; It's 1 or 2. If it's 1, chip shift is 14
-                        cp 2                              ; Is it 2?
-                        jp nz, ChipOffsetDone             ; No, we're done
-                        ld c, 32                          ; It's 2. Chip shift is 28
-
-ChipOffsetDone          ld a,d                            ; AY fine tune register number is voice number * 2, get voice number
+                        and %00001100                     ; 4 voices per chip, so this gets chip number*4
+                        rla                               ; Now it's chip number *8
+                        rla                               ; Now it's chip number *16 which = chip offset
+                        ld c, a
+                        ld a,d                            ; AY fine tune register number is voice number * 2, get voice number
                         add a,a                           ; Double it
-                        neg                               ; Negate and add 13 to get offset into buffer
-                        add a, 15
+                        cpl                               ; Effectively subtract from 15
+                        and %00001111                     ; Mask off extra bits
                         add a, c                          ; Add chip shift
                         ld b, high(outputBuffer)          ; Load up buffer address in BC
                         ld c, a
