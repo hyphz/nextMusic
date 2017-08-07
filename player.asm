@@ -126,13 +126,26 @@ MusicInit               ld a,%00111000                   ; Enable tone on all ch
 ; ***********************************************************************************************
 ; *** MUSICUPDATE - RUNS EVERY FRAME, ALL THE TIME.
 
+
+; -- Unrolling loop for sending out buffer since this is a major performance point.
+DumpBuffer              macro(size)
+                        loop size
+                          ld b, high(AyRegSelect)
+                          out (bc), d
+                          ld b, e
+                          outi
+                          dec d
+                        lend
+                        mend
+
 ; -- Crank out data from buffer to ports.
 MusicUpdate             ld hl, outputBuffer+2             ; Skip two fake registers at the start of AY block
                         ld bc, AyRegSelect                ; We should only need to load this once
+                        ld e, $c0                         ; For later copying into b (reg->reg is faster?)
                         ld a, %11111111                   ; Turns on both stereo channels and selects AY1
                         out (bc),a                        ; Select AY1
                         ld d, 13                          ; Highest AY register
-                        call DumpBufferLoop
+                        DumpBuffer(14)
 
 ; DEBUG: If emulator doesn't pay attention to the Next chip select, we must stop here, or later
 ; writes will overwrite values in the one chip that is emulated
@@ -143,21 +156,21 @@ MusicUpdate             ld hl, outputBuffer+2             ; Skip two fake regist
                         dec a
                         out (bc),a                        ; Select AY2
                         ld d, 13
-                        call DumpBufferLoop
+                        DumpBuffer(14)
 
                         ld hl, outputBuffer+AY2Buffer+2   ; Block for AY3, skipping two fake registers..
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select AY3
                         ld d, 13
-                        call DumpBufferLoop
+                        DumpBuffer(14)
 
                         ld hl, outputBuffer+AY3Buffer     ; Block for SID. Don't need fake registers here
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select SID
                         ld d, 22
-                        call DumpBufferLoop
+                        DumpBuffer(23)
 
 ; -- See if there's a beat this frame or not
 NoNextSoundEmu          ld a, (TempoWait)                 ; Load tempo counter
@@ -183,18 +196,7 @@ NoFrameMaintenance      ld de, VoiceSize                  ; DE is distance to mo
                         djnz CheckVFrameMaint             ; Decrement B and loop if not zero
                         ret                               ; We're done
 
-; -- Subroutine to dump registers from the buffer to the sound chips.
-DumpBufferLoop          ld b, high(AyRegSelect)           ; Cue up to select D'th register
-                        out (bc), d                       ; Select it
-                        ld b, $c0                         ; Changes BC to register write, after the dec outi does
-                        outi                              ; Write buffer value to register and increment HL
-                        dec d                             ; Count down register number (buffer has registers in reverse order)
-                        jp nz, DumpBufferLoop             ; If there are registers left, go back
-                        ld b, high(AyRegSelect)           ; Last one with D=0
-                        out (bc), d
-                        ld b, $c0                         ; Changes BC to register write, after the dec outi does
-                        outi
-                        ret
+
 
 
 ; ***********************************************************************************************
