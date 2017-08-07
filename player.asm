@@ -100,20 +100,90 @@ BufferSize              equ .
                         org AppFirst                    ; Start of application
 
 AppEntry                ld sp, $ff46                    ; Sync zeus and zesarux stack location
+                        call AssessSound
                         call MusicInit
 TestLoop                call MusicUpdate
                         halt
                         jp TestLoop
 
 
+AssessSound             ld bc, AyRegSelect
+                        ld a, %11111111                   ; Select AY1
+                        out (bc),a
+                        ld a, $0b
+                        out (bc),a                        ; Select envelope period
+                        ld b, high(AyRegWrite)
+                        ld a, $20                         ; Write 20 to it
+                        out (bc), a
+                        ld b, high(AyRegSelect)           ; Try reading it back
+                        in a, (bc)
+                        cp $20
+                        jp nz, NoSound                    ; We have no sound at all!?
+                        ld a, %11111110                   ; Select AY2
+                        out (bc), a
+                        ld a, $0b                         ; Envelope period again
+                        out (bc), a
+                        ld b, high(AyRegWrite)
+                        ld a, $30                         ; Write $30 to it
+                        out (bc), a
+                        ld b, high(AyRegSelect)
+                        ld a, %11111111                   ; Switch back to AY1
+                        out (bc), a
+                        ld a, $0b
+                        out (bc), a                       ; Read back
+                        in a, (bc)
+                        cp $30                            ; If it's 30, selector was ignored
+                        jp z, OnlyOne                     ; So we have only one chip
+                        ld a, %11111110                   ; Actually read from second chip
+                        ld a, $0b
+                        out (bc), a
+                        in a, (bc)
+                        cp $30                            ; If it's not 30, second chip is missing
+                        jp nz, OnlyOne
+                        ld a, %11111101                   ; Select AY3
+                        out (bc), a
+                        ld a, $0b                         ; Envelope period again
+                        out (bc), a
+                        ld b, high(AyRegWrite)
+                        ld a, $40                         ; Write $30 to it
+                        out (bc), a
+                        ld b, high(AyRegSelect)
+                        ld a, %11111110                   ; Switch back to AY2
+                        out (bc), a
+                        ld a, $0b
+                        out (bc), a                       ; Read back
+                        in a, (bc)
+                        cp $40
+                        jp z, OnlyTwo
+                        ld a, %11111101                   ; Actually read from third chip
+                        ld a, $0b
+                        out (bc), a
+                        in a, (bc)
+                        cp $40                            ; If it's not 40, third chip is missing
+                        jp nz, OnlyTwo
+                        ret
+
+NoSound                 ld a, 0
+                        call SetBorder
+                        ret
+
+OnlyOne                 ld a, 1
+                        call SetBorder
+                        ret
+
+OnlyTwo                 ld a, 2
+                        call SetBorder
+                        ret
+
+
+                        ld d, 13                          ; Highest AY register
+
+
 MusicInit               ld a,%00111000                   ; Enable tone on all channels
                         ld (outputBuffer+15-AyToneEnable), a
-                        ld a,%00001111
-                        ld (outputBuffer+15-AyAmplitudeA), a
-                        ld a,%00001111
-                        ld (outputBuffer+15-AyAmplitudeB), a
-                        ld a,%00001111
-                        ld (outputBuffer+15-AyAmplitudeC), a
+                        ld (outputBuffer+31-AyToneEnable), a
+                        ld (outputBuffer+47-AyToneEnable), a
+
                         ld hl, music                      ; Set musicPointer to address of start of music
                         ld (MusicMasterPC), hl
                         ld a, 0                           ; Set initial tempoWait to 0 so music starts immediately
@@ -147,25 +217,21 @@ MusicUpdate             ld hl, outputBuffer+2             ; Skip two fake regist
                         ld d, 13                          ; Highest AY register
                         DumpBuffer(14)
 
-; DEBUG: If emulator doesn't pay attention to the Next chip select, we must stop here, or later
-; writes will overwrite values in the one chip that is emulated
-                        jp NoNextSoundEmu
-
-                        ld hl, outputBuffer+AY1Buffer+2   ; Block for AY2, skipping two fake registers..
-                        ld b, high(AyRegSelect)
+                        ld hl, outputBuffer+AY2Buffer+2   ; Block for AY2, skipping two fake registers..
+                        ld b, high(AyRegSelect)           ; (Reloading HL is faster than adding 3)
                         dec a
                         out (bc),a                        ; Select AY2
                         ld d, 13
                         DumpBuffer(14)
 
-                        ld hl, outputBuffer+AY2Buffer+2   ; Block for AY3, skipping two fake registers..
+                        ld hl, outputBuffer+AY3Buffer+2   ; Block for AY3, skipping two fake registers..
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select AY3
                         ld d, 13
                         DumpBuffer(14)
 
-                        ld hl, outputBuffer+AY3Buffer     ; Block for SID. Don't need fake registers here
+                        ld hl, outputBuffer+SIDBuffer     ; Block for SID. Don't need fake registers here
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select SID
@@ -369,8 +435,9 @@ PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of cur
                         rla                               ; Now it's chip number *8
                         rla                               ; Now it's chip number *16 which = chip offset
                         ld c, a
-                        ld a,d                            ; AY fine tune register number is voice number * 2, get voice number
-                        add a,a                           ; Double it
+                        ld a,d                            ; Recover voice number
+                        and %00000011                     ; Mask off chip number
+                        add a,a                           ; AY fine tune register number is voice number * 2
                         cpl                               ; Effectively subtract from 15
                         and %00001111                     ; Mask off extra bits
                         add a, c                          ; Add chip shift
@@ -551,105 +618,9 @@ outputBuffer            loop BufferSize           ; 3 AYs (14 * 3) + 1 SID (25) 
                           db 0
                         lend
 
-; Quick reference to amplitude positions in output buffer based on inverted voice number
-                        align $0100
-ampPointer              dw 0
-                        dw outputBuffer + SIDBuffer
-                        dw outputBuffer + SIDBuffer
-                        dw outputBuffer + SIDBuffer
-                        dw 0
-                        dw outputBuffer + AY3Buffer + (15 - AyAmplitudeC)
-                        dw outputBuffer + AY3Buffer + (15 - AyAmplitudeB)
-                        dw outputBuffer + AY3Buffer + (15 - AyAmplitudeA)
-                        dw 0
-                        dw outputBuffer + AY2Buffer + (15 - AyAmplitudeC)
-                        dw outputBuffer + AY2Buffer + (15 - AyAmplitudeB)
-                        dw outputBuffer + AY2Buffer + (15 - AyAmplitudeA)
-                        dw 0
-                        dw outputBuffer + AY1Buffer + (15 - AyAmplitudeC)
-                        dw outputBuffer + AY1Buffer + (15 - AyAmplitudeB)
-                        dw outputBuffer + AY1Buffer + (15 - AyAmplitudeA)
+include "milburn.sng.asm"
 
 
-
-
-BasicAmpCurve           db $05, 2
-                        db $0f, 2
-                        db $0c, 2
-                        db $0c, 0
-
-BasicRelease            db $0c,2
-                        db $0c,2
-                        db $0c,2
-                        db $0c,2
-                        db $0c,2
-                        db $05,2
-                        db $00,0
-
-SawtoothMaybe           db $0c, 2
-                        db $0e, 2
-                        db $0f, -4
-
-OneBeatCurve            db $05, 2
-                        db $0f, 2
-                        db $0c, 2
-                        db $0c,2
-                        db $0c,2
-                        db $0c,2
-                        db $05,0
-
-
-
-
-BasicInstrument         dw BasicAmpCurve, BasicRelease, OneBeatCurve
-SawInstrument           dw SawtoothMaybe, SawtoothMaybe, SawtoothMaybe
-
-
-
-Tempo                   db 7                              ; Number of frames per beat count
-
-music                   db 0, 0
-                        dw pattern_arp
-                       ; db 0, 1
-                       ; dw pattern_bass
-                        db 12, 2
-                        dw pattern_mel
-                      ;  db 2, 1
-                      ;  dw pattern
-                        db 255
-
-
-; c  c#  d  d#  e  f  f# g  g# a  a# b
-; 0  1   2  3   4  5  6  7  8  9  10 11
-; 12 13  14 15  16 17 18 19 20 21 22 23
-; 24 25  26 27  28 29 30 31 32 33 34 35
-; 36 37  38 39  40 41 42 43 44 45 46 47
-; 48 49  50 51  52 53 54 55 56 57 58 59
-; 60 61  62 63  64 65 66 67 68 69 70 71
-; 72 73  74 75  76 77 78 79 80 81 82 83
-; 84 85  86 87  88 89 90 91 92 93 94 95
-
-
-failWaltz               db 0, 48, 4, 53, 8, 48, 4, 53, 8, $80
-
-
-pattern_bass            db 0, 12, 4, 17, 4, 19, 4, $80
-
-
-
-pattern_arp             db 0, 12, 1, 16, 1, 19, 1, 24
-                        db 1, 17, 1, 21, 1, 24, 1, 29
-                        db 1, 19, 1, 23, 1, 26, 1, 31
-                        db 1, $80
-
-pattern_mel             db 0, $82: dw BasicInstrument
-                        db 0, 52
-                        db 3, 48
-                        db 1, 48
-                        db 3, 50
-                        db 1, 50
-                        db 0, $82: dw SawInstrument
-                        db 2, 52, 1, 53, 1, 52, 3, 48, 1, 48, 3, 45, 1, 43, 4, $80
 
 
 
