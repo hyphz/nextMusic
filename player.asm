@@ -122,7 +122,11 @@ MusicInit               ld a,%00111000                   ; Enable tone on all ch
                         ld (BeatWait), a
                         ret
 
-; Update 1 - crank out data from buffer to ports.
+
+; ***********************************************************************************************
+; *** MUSICUPDATE - RUNS EVERY FRAME, ALL THE TIME.
+
+; -- Crank out data from buffer to ports.
 MusicUpdate             ld hl, outputBuffer+2             ; Skip two fake registers at the start of AY block
                         ld bc, AyRegSelect                ; We should only need to load this once
                         ld a, %11111111                   ; Turns on both stereo channels and selects AY1
@@ -133,28 +137,53 @@ MusicUpdate             ld hl, outputBuffer+2             ; Skip two fake regist
 ; DEBUG: If emulator doesn't pay attention to the Next chip select, we must stop here, or later
 ; writes will overwrite values in the one chip that is emulated
                         jp NoNextSoundEmu
-                        ld hl, outputBuffer+AY1Buffer+2
+
+                        ld hl, outputBuffer+AY1Buffer+2   ; Block for AY2, skipping two fake registers..
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select AY2
                         ld d, 13
                         call DumpBufferLoop
 
-                        ld hl, outputBuffer+AY2Buffer+2
+                        ld hl, outputBuffer+AY2Buffer+2   ; Block for AY3, skipping two fake registers..
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select AY3
                         ld d, 13
                         call DumpBufferLoop
 
-                        ld hl, outputBuffer+AY3Buffer
+                        ld hl, outputBuffer+AY3Buffer     ; Block for SID. Don't need fake registers here
                         ld b, high(AyRegSelect)
                         dec a
                         out (bc),a                        ; Select SID
                         ld d, 22
                         call DumpBufferLoop
-NoNextSoundEmu          jp FrameCycle
 
+; -- See if there's a beat this frame or not
+NoNextSoundEmu          ld a, (TempoWait)                 ; Load tempo counter
+                        sub 1                             ; Subtract one from it
+                                                          ; (SUB takes 3 more states than DEC but sets the carry flag properly,
+                                                          ; which saves us from doing a CP to test for zero, which would take 7 more)
+                        jp c, NextBeat                    ; If subtracting 1 overflowed, it was 0, so go process the beat
+                        ld (TempoWait), a                 ; It didn't overflow. Store it back into TempoWait counter
+
+; -- No beat this frame. Do frame maintenance
+                        ld hl, VoiceStatusBank            ; HL is address of voice to check
+                        ld b, NumVoices                   ; B is loop counter for checking
+CheckVFrameMaint        ld a, (hl)                        ; Load status byte for current voice
+                        or 0                              ; Is voice active?
+                        jp z, NoFrameMaintenance          ; No, this voice doesn't need frame maintenance
+                        push hl                           ; Save HL and BC (can't just save B, stack values have to be 16bit)
+                        push bc
+                        call FrameMaintainVoice           ; Do frame maintenance
+                        pop bc                            ; Restore HL and BC
+                        pop hl
+NoFrameMaintenance      ld de, VoiceSize                  ; DE is distance to move HL ahead to next voice
+                        add hl, de                        ; Move HL to point at next voice block
+                        djnz CheckVFrameMaint             ; Decrement B and loop if not zero
+                        ret                               ; We're done
+
+; -- Subroutine to dump registers from the buffer to the sound chips.
 DumpBufferLoop          ld b, high(AyRegSelect)           ; Cue up to select D'th register
                         out (bc), d                       ; Select it
                         ld b, $c0                         ; Changes BC to register write, after the dec outi does
@@ -168,76 +197,55 @@ DumpBufferLoop          ld b, high(AyRegSelect)           ; Cue up to select D't
                         ret
 
 
-
-
-; -- See if there's a beat this frame or not
-FrameCycle              ld a, (TempoWait)                 ; Load tempo counter
-                        sub 1                             ; Subtract one from it
-                                                          ; (SUB takes 3 more states than DEC but sets the carry flag properly,
-                                                          ; which saves us from doing a CP to test for zero, which would take 7 more)
-                        jp c, NextBeat                    ; If subtracting 1 overflowed, it was 0, so go process the beat
-                        ld (TempoWait), a                 ; It didn't overflow. Store it back into TempoWait counter
-                                                          ; -- No beat this frame. Do frame maintenance
-                        ld hl, VoiceStatusBank            ; HL is address of voice to check {
-                        ld b, NumVoices                   ;     B is loop counter for checking {
-CheckVFrameMaint        ld a, (hl)                        ;         Load status byte for current voice
-                        or 0                              ;            Is voice active?
-                        jp z, NoFrameMaintenance          ;         No, this voice doesn't need frame maintenance
-                        push hl                           ;         Save HL and BC (can't just save B, stack values have to be 16bit)
-                        push bc
-                        call FrameMaintainVoice           ;         Do frame maintenance (we don't know how yet ;) )
-                        pop bc                            ;         Restore HL and BC
-                        pop hl
-NoFrameMaintenance      ld de, VoiceSize                  ;         DE is distance to move HL ahead to next voice
-                        add hl, de                        ;         Move HL to point at next voice block
-                        djnz CheckVFrameMaint             ;         Decrement B and loop if not zero
-                                                          ;     }
-                                                          ; }
-                        ret                               ; We're done
+; ***********************************************************************************************
+; *** NEXTBEAT - RUNS EVERY BEAT.
 
 
 ; -- This frame is a beat. Update tempo clock
 NextBeat                ld a, (Tempo)                     ; Load static tempo value
                         ld (TempoWait), a                 ; And resit tempo clock to it
-                                                          ; -- Check if a master command is running this beat
+
+; -- Check if a master command is running this beat
                         ld a, (BeatWait)                  ; Load delta timer for master command
 CheckNextMaster         sub 1                             ; Same trick as above to set carry
                         jp nc, NoMasterCmd                ; If it didn't overflow it wasn't 0, we are waiting, don't run master command
+
+; -- Process a master command and any follow-ups with delta time 0
 ReptMasterCmd           call NextMasterCmd                ; Yes, We aren't waiting -> go run it
                                                           ; Back from doing master command, set delay for next master command
                         ld hl,(MusicMasterPC)             ; HL holds address of delay for next command
                         ld a,(hl)                         ; A holds delay for next command
                         jp CheckNextMaster                ; Process it this frame
 
+; -- Master commands are done or absent; do beat and frame maintenance
 NoMasterCmd             ld (BeatWait), a                  ; Put new delta wait (from command, or subtraction) back into delta timer
-                                                          ; -- Do beat and frame maintenance on a beat frame
-                        ld hl, VoiceStatusBank            ; HL is address of voice to check {
-                        ld b, NumVoices                   ;     B is loop counter for checking {
-CheckBeatMaint          ld a, (hl)                        ;         A is current voice's status byte {
-                        or 0                              ;             Is bit 0 set?
-                        jp z, NoBeatMaintenance           ;             If not, Nothing needed (nothing would ever need frame but not beat maintenance)
-                        push bc, hl                       ;         Store HL and B                                               ;
-                        call BeatMaintainVoice            ;         Do beat maintenance
-                        pop hl, bc
+                        ld hl, VoiceStatusBank            ; HL is address of voice to check
+                        ld b, NumVoices                   ; B is loop counter for checking
+CheckBeatMaint          ld a, (hl)                        ; A is current voice's status byte {
+                        or 0                              ; Is it 0?
+                        jp z, NoBeatMaintenance           ; If so, nothing needed
+                        push bc, hl                       ; Store HL and B                                               ;
+                        call BeatMaintainVoice            ; Do beat maintenance
+                        pop hl, bc                        ; Cycle them on the stack so the routines can be separate
                         push bc, hl
-                        call FrameMaintainVoice           ;         Yes, go do it (we don't know how yet.. ;) )
-                        pop hl, bc                        ;         Recover HL and B
-NoBeatMaintenance       ld de, VoiceSize                  ;         DE is amount to advance HL to get next voice
-                        add hl, de                        ;         Advance to next voice
-                        djnz CheckBeatMaint               ;         And loop
-                                                          ;     }
-                                                          ; }
+                        call FrameMaintainVoice           ; Do frame maintenance
+                        pop hl, bc                        ; Recover HL and B
+NoBeatMaintenance       ld de, VoiceSize                  ; DE is amount to advance HL to get next voice
+                        add hl, de                        ; Advance to next voice
+                        djnz CheckBeatMaint               ; And loop
                         ret                               ; We're done
 
+; ***********************************************************************************************
+; *** MASTER COMMANDS. MUST UPDATE MUSICMASTERPC AFTER COMPLETION
 
 ; -- Master command runs this beat, do it.
-NextMasterCmd           ld hl, (MusicMasterPC)            ; HL is address of current delta time {
-                        inc hl                            ;     Now HL is address of current command..
-                        ld d, (hl)                        ;     D is current master musicop {
-                        ld a, d
-                        and %11110000                     ;         A is current master musciop without voice number {
-                        jp z, StartPatternCmd             ;              Check command. 0 = Start pattern
-MasterCommandPanic      ld a, 04
+NextMasterCmd           ld hl, (MusicMasterPC)            ; HL is address of current delta time
+                        inc hl                            ; Now HL is address of current command
+                        ld d, (hl)                        ; D is current command
+                        ld a, d                           ; Mask off voice number
+                        and %11110000                     ; A is current master musciop without voice number {
+                        jp z, StartPatternCmd             ; Check command. 0 = Start pattern
+MasterCommandPanic      ld a, 04                          ; Color border to warn invalid master command
                         call SetBorder
                         jp MasterCommandPanic
 
@@ -292,19 +300,31 @@ StartPatternCmd         ld a, d                           ; A is current voice n
                         ld (MusicMasterPC), hl            ; And store back into master PC
                         ret
 
-; BeatMaintainVoice. Called from nextbeat with HL pointing to voice's control block and B holding reversed voice number
-; No postconditions
+; ***********************************************************************************************
+; *** BEAT MAINTENANCE PER VOICE. CALLED ON ACTIVE VOICES ONCE PER BEAT
+; *** ENTRY: HL POINTS TO VOICE CONTROL BLOCK, B IS REVERSED VOICE NUMBER
+; *** THESE CAN BE FREELY MANGLED BECAUSE THEY ARE STORED ON THE STACK.
+
+; -- Convert reversed voice number in b to "real" voice number in d. Can we do without this?
 BeatMaintainVoice       ld a, NumVoices                   ; Get "real" voice number from countdown loop counter
                         sub b
                         ld d, a
+
+; -- Copy HL to IX for indexing into the voice control block
                         ld a, l                           ; Copy HL to IX for indexing stuff below
                         ld ixl, a
                         ld a, h
                         ld ixh, a
+
+; -- Clear one beat flag
                         ld e, 0
+
+; -- Check for next pattern command and run it if its' present. Also run any follow-ups via PatternReEntry.
                         ld a,(ix+BeatCountdown)           ; Time for next pattern command?
 PatternReEntry          sub 1
                         jp c, PatternCommand              ; Yes, go do it
+
+; -- If one beat left in note, switch envelope to release unless one beat flag was set this beat.
                         ld (ix+BeatCountdown), a
                         or 0                              ; Is beat countdown now 0 (this was last beat?)
                         ret nz                            ; No, we're done
@@ -321,21 +341,27 @@ PatternReEntry          sub 1
                         ld (ix+AmplitudePC+1), a
                         ret                               ; And we're done
 
+; ***********************************************************************************************
+; *** PATTERN COMMAND PROCESSING
+; *** ENTRY: IX POINTS TO VOICE CONTROL BLOCK, B IS REVERSED VOICE NUMBER, D IS REAL VOICE NUMBER
+; *** THESE CAN BE FREELY MANGLED BECAUSE THEY ARE STORED ON THE STACK.
 
 
-; PatternCommand. Called from BeatMaintainVoice with d holding voice number and ix holding base of voice status structure
+; -- See if pattern command is an actual command or a note.
 PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of current pattern deltatime
                         inc hl                            ; HL is address of current command {
                         ld a,(hl)                         ; A is current command
                         bit 7, a                          ; Is MSB set?
                         jp nz, runNoteCommand             ; If so, it's a command, not a note
-                                                          ; -- It's a note. Play it
+
+; *** PLAY A NOTE.
+; -- Point HL at address of tuning values for the note.
                         push hl                           ; We'll need the command address again
                         ld h, high(notetable)             ; Get segment address of note table
                         add a,a                           ; Notes are 2 bytes, double to get offset in note table
                         ld l,a                            ; Note table is segment aligned so just setting low bit finds location
-                                                          ; HL is address of tuning values for this note
 
+; -- Point BC at address of coarse/fine tune registers in output buffer.
                         ld a,d                            ; Which chip is this voice on?
                         and %00001100                     ; 4 voices per chip, so this gets chip number*4
                         rla                               ; Now it's chip number *8
@@ -348,18 +374,23 @@ PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of cur
                         add a, c                          ; Add chip shift
                         ld b, high(outputBuffer)          ; Load up buffer address in BC
                         ld c, a
+
+; -- Copy tuning values from notetable into output buffer.
                         ld a, (hl)                        ; Load coarse and fine tune registers in buffer
                         ld (bc), a
                         dec c
                         inc hl
                         ld a, (hl)
                         ld (bc),a
-                                                          ; }
-                        pop hl                            ; HL is address of current command {
-PatternPCOneByte        inc hl                            ; HL now points to address of wait time of next command
+
+; -- Get next command's deltaTime value to see how long this note is.
+                        pop hl                            ; HL is address of current command
+                        inc hl                            ; HL now points to address of wait time of next command
                         ld (ix+PatternPC), hl             ; It's the new music PC
                         ld a, (hl)                        ; Get next note wait. Is it 1?
                         sub 1                             ; We'll use this in a moment
+
+; -- Set AmplitudePC to instrument's one-beat or attack list based on note length.
                         ld hl, (ix+Instrument)            ; HL is address of instrument structure
                         ld e, 0                           ; Clear one beat flag
                         jp nz, MoreThanOneBeat            ; If next note wait wasn't 1, skip..
@@ -371,10 +402,10 @@ MoreThanOneBeat         ld a, (hl)                        ; Copy amp table addre
                         inc hl
                         ld a, (hl)
                         ld (ix+AmplitudePC+1), a
-                        jp FinishPatternCommand           ; }
+                        jp FinishPatternCommand
 
-; runNoteCommand. Called from PatternCommand if command is knnown to be a non-note.
-; HL is address of current command, A is current command, D is voice number.
+; ** PATTERN COMMAND (OTHER THAN NOTE) PROCESSING.
+; HL is address of current command, A is current command, IX is voice status block, D is voice number.
 runNoteCommand          and %01111111                     ; Mask off command indicator bit
                         add a, a
                         push hl
@@ -388,25 +419,22 @@ runNoteCommand          and %01111111                     ; Mask off command ind
                         ld hl, bc
                         jp (hl)                           ; Poor man's switch statement
 
-; We have no idea how to do this yet
-SidWrite                jp SidWrite
-
-CommandPanic            jp CommandPanic
-
 CommandVectorTable      dw PatternLoopCommand, SetLoopCommand, SetInstrumentCommand, HushCommand
 
-
+; -- Pattern Loop command. Copy LoopPC back to PatternPC
 PatternLoopCommand      pop hl                            ; We don't need it in this case
                         ld bc, (ix+LoopPC)                ; Set patternPC to loopPC
                         ld (ix+PatternPC), bc
                         jp FinishPatternCommand           ; Since we just changed patternPC don't calculate it for "next" command
 
+; -- Set Loop address. Copy new PatternPC to LoopPC
 SetLoopCommand          pop hl                            ; Get back address of this command
                         inc hl                            ; Add one gives address of next command
                         ld (ix+LoopPC), hl                ; That's the new loop address
                         ld (ix+PatternPC), hl             ; And is also the next command
                         jp FinishPatternCommand
 
+; -- Set instrument. Copy bytes after the command to Instrument
 SetInstrumentCommand    pop hl                            ; Get back address of this command
                         inc hl                            ; Add one to point to address of instrument vector
                         ld c, (hl)                        ; Copy instrument vector into CB
@@ -417,19 +445,23 @@ SetInstrumentCommand    pop hl                            ; Get back address of 
                         ld (ix+PatternPC), hl             ; After last INC, HL points to next command
                         jp FinishPatternCommand
 
+; -- Hush (end maintenance). Set update status to 0
 HushCommand             pop hl                            ; We don't need command address, but balance stack
                         ld (ix+UpdateStatus), 0           ; Stop all maintenance on this voice
                         ret                               ; This voice is dead, there can be no next command
                                                           ; So don't re-enter, just finish
 
 
+; -- Pattern command done. Get wait value for next command and loop just in case it's 0.
 FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)
                         jp PatternReEntry
 
-; Called with HL = address of voice status block, B is inverted voice number.
-; Voice is known to be active.
-; Note - this potentially runs 16 times per frame. It should probably be optimized ;)
+; ***********************************************************************************************
+; *** FRAME MAINTENANCE PER VOICE. RUNS 1/FRAME ON ACTIVE VOICES ONLY
+; *** ENTRY: HL POINTS TO VOICE CONTROL BLOCK, B IS REVERSED VOICE NUMBER
+; *** THESE CAN BE FREELY MANGLED BECAUSE THEY ARE STORED ON THE STACK.
+
 FrameMaintainVoice      ld a, b                    ; Double inverted voice number for index into amp location table
                         dec a
                         ld de, hl                  ; Store HL for the moment
