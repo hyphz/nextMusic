@@ -462,16 +462,19 @@ FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for n
 ; *** ENTRY: HL POINTS TO VOICE CONTROL BLOCK, B IS REVERSED VOICE NUMBER
 ; *** THESE CAN BE FREELY MANGLED BECAUSE THEY ARE STORED ON THE STACK.
 
-FrameMaintainVoice      ld a, b                    ; Double inverted voice number for index into amp location table
+FrameMaintainVoice      ld a, b
+                        neg
+                        rla
+                        rla
+                        and %00110000
+                        or %00000100
+                        ld c, a
+                        ld a, b
                         dec a
-                        ld de, hl                  ; Store HL for the moment
-                        add a, a
-                        ld l, a                    ; HL is address of address of amplitude buffer value
-                        ld h, high(ampPointer)
-                        ld c, (hl)
-                        inc hl
-                        ld b, (hl)                 ; BC is now address of amplitude output byte for this voice
-                        ld hl, de                  ; Get back the voice status block address we saved earlier
+                        and %00000011
+                        add a, c
+                        ld b,high(outputBuffer)
+                        ld c,a
                         ld de, AmplitudePC
                         add hl, de                 ; HL now points to amplitude PC in voice status block
                         ld e, (hl)                 ; Get address of actual amplitude value
