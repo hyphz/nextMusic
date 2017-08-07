@@ -323,19 +323,35 @@ PatternReEntry          sub 1
 ; PatternCommand. Called from BeatMaintainVoice with d holding voice number and ix holding base of voice status structure
 PatternCommand          ld hl,(ix+PatternPC)              ; HL is address of current pattern deltatime
                         inc hl                            ; HL is address of current command {
-                        ld a,(hl)                         ;     A is current command {
-                        bit 7, a                          ;         Is MSB set?
-                        jp nz, runNoteCommand             ;         It's a command, not a note
-                                                          ;         -- It's a note. Play it
-                        push hl                           ;         We'll need the command address again
-                        ld h, high(notetable)             ;         Get segment address of note table
-                        add a,a                           ;         Notes are 2 bytes, double to get offset in note table
-                        ld l,a                            ;         Note table is segment aligned so just setting low bit finds location
-                                                          ; } HL is address of tuning values for this note {
-                        ld a,d                            ;         AY fine tune register number is voice number * 2, get voice number
-                        add a,a                           ;         Double it
+                        ld a,(hl)                         ; A is current command
+                        bit 7, a                          ; Is MSB set?
+                        jp nz, runNoteCommand             ; If so, it's a command, not a note
+                                                          ; -- It's a note. Play it
+                        push hl                           ; We'll need the command address again
+                        ld h, high(notetable)             ; Get segment address of note table
+                        add a,a                           ; Notes are 2 bytes, double to get offset in note table
+                        ld l,a                            ; Note table is segment aligned so just setting low bit finds location
+                                                          ; HL is address of tuning values for this note
+
+                        ld a,d                            ; Which chip is this voice on?
+                        rra                               ; Roll accumulator twice to divide by 4
+                        rra
+                        and %00000011                     ; Mask off rolled over bits
+                                                          ; (This, strangely, is faster than just shifting)
+                        ld c,0
+                        jp z, ChipOffsetDone              ; Voice/4 = 0, it's AY1, no worries
+                        cp 3
+                        jp z, SidWrite                    ; It's the SID, that will require a new routine
+                        ld c, 14                          ; It's 1 or 2. If it's 1, chip shift is 14
+                        cp 2                              ; Is it 2?
+                        jp nz, ChipOffsetDone             ; No, we're done
+                        ld c, 28                          ; It's 2. Chip shift is 28
+
+ChipOffsetDone          ld a,d                            ; AY fine tune register number is voice number * 2, get voice number
+                        add a,a                           ; Double it
                         neg                               ; Negate and add 13 to get offset into buffer
                         add a, 13
+                        add a, c                          ; Add chip shift
                         ld b, high(outputBuffer)          ; Load up buffer address in BC
                         ld c, a
                         ld a, (hl)                        ; Load coarse and fine tune registers in buffer
@@ -378,9 +394,12 @@ runNoteCommand          and %01111111                     ; Mask off command ind
                         ld hl, bc
                         jp (hl)                           ; Poor man's switch statement
 
+; We have no idea how to do this yet
+SidWrite                jp SidWrite
+
 CommandPanic            jp CommandPanic
 
-CommandVectorTable      dw PatternLoopCommand, SetLoopCommand, SetInstrumentCommand
+CommandVectorTable      dw PatternLoopCommand, SetLoopCommand, SetInstrumentCommand, HushCommand
 
 
 PatternLoopCommand      pop hl                            ; We don't need it in this case
@@ -388,21 +407,27 @@ PatternLoopCommand      pop hl                            ; We don't need it in 
                         ld (ix+PatternPC), bc
                         jp FinishPatternCommand           ; Since we just changed patternPC don't calculate it for "next" command
 
-SetLoopCommand          pop hl
-                        inc hl
-                        ld (ix+LoopPC), hl
-                        ld (ix+PatternPC), hl
+SetLoopCommand          pop hl                            ; Get back address of this command
+                        inc hl                            ; Add one gives address of next command
+                        ld (ix+LoopPC), hl                ; That's the new loop address
+                        ld (ix+PatternPC), hl             ; And is also the next command
                         jp FinishPatternCommand
 
-SetInstrumentCommand    pop hl
-                        inc hl
-                        ld c, (hl)
+SetInstrumentCommand    pop hl                            ; Get back address of this command
+                        inc hl                            ; Add one to point to address of instrument vector
+                        ld c, (hl)                        ; Copy instrument vector into CB
                         inc hl
                         ld b, (hl)
                         inc hl
-                        ld (ix+Instrument), bc
-                        ld (ix+PatternPC), hl
+                        ld (ix+Instrument), bc            ; Replace instrument setting with it
+                        ld (ix+PatternPC), hl             ; After last INC, HL points to next command
                         jp FinishPatternCommand
+
+HushCommand             pop hl                            ; We don't need command address, but balance stack
+                        ld (ix+UpdateStatus), 0           ; Stop all maintenance on this voice
+                        ret                               ; This voice is dead, there can be no next command
+                                                          ; So don't re-enter, just finish
+
 
 FinishPatternCommand    ld bc,(ix+PatternPC)              ; Get wait value for next command
                         ld a,(bc)

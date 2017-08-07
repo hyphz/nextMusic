@@ -30,6 +30,8 @@ It's another list of commands. As before, each one consists of a time in beats t
 
 `<delta-time> $82 <ll> <hh>` Set the instrument (amplitude table) address to $hhll.
 
+`<delta-time> $83` Disables maintenance on this voice. This means no new notes will sound and envelopes won't play. You'd probably usually use this after playing a rest to make the voice go silent, but if you want a continuously sounding uniform tone that takes no CPU time to maintain, who am I to say you're wrong?
+
 ### Amplitude Tables (Instruments)
 
 An Instrument currently is represented by a series of three addresses:
