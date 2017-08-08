@@ -31,7 +31,7 @@ SawInstrument           dw SawtoothMaybe, SawtoothMaybe, SawtoothMaybe
 
 
 
-Tempo                   db 7                              ; Number of frames per beat count
+Tempo                   db 10                              ; Number of frames per beat count
 
 music                   db 0, 0
                         dw soTopline
@@ -47,6 +47,10 @@ music                   db 0, 0
                         dw tenLowline
                         db 0, 8
                         dw bassLine
+                        db 0, 9
+                        dw organPedal
+                        db 0, 10
+                        dw organTreble
 
                        ; db 0, 1
                        ; dw pattern_bass
@@ -69,6 +73,30 @@ music                   db 0, 0
 ; 60 61  62 63  64 65 66 67 68 69 70 71
 ; 72 73  74 75  76 77 78 79 80 81 82 83
 ; 84 85  86 87  88 89 90 91 92 93 94 95
+
+
+organTreble  db 2
+             db 38, 2
+             db 40, 2
+             db 40, 1
+             db 42, 1
+             db 43, 1
+             db 45, 1
+             db 47, 3
+             db 45, 1
+             db 48, 3
+             db 45, 1
+             db 47, 3
+             db 43, 1
+             db 42, 6
+             db $83
+
+organPedal   db 0
+             db 26, 18
+             db 33, 2
+             db 26, 6
+             db $83
+
 
 bassLine     db 2
              db 50,2

@@ -231,6 +231,8 @@ MusicUpdate             ld hl, outputBuffer+2             ; Skip two fake regist
                         ld d, 13
                         DumpBuffer(14)
 
+                        jp NoNextSoundEmu                 ; Nothing emulates the SID.. yet..
+
                         ld hl, outputBuffer+SIDBuffer     ; Block for SID. Don't need fake registers here
                         ld b, high(AyRegSelect)
                         dec a
