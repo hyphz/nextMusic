@@ -620,7 +620,9 @@ outputBuffer            loop BufferSize           ; 3 AYs (14 * 3) + 1 SID (25) 
                           db 0
                         lend
 
-include "milburn.sng.asm"
+include "chicken.sng.asm"
+
+
 
 
 
